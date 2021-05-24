@@ -15,20 +15,20 @@ if __name__ == "__main__":
         "--num-workers", type=int, help="number of data loader workers", default=1
     )
     parser.add_argument(
-        "--num-epochs", type=int, help="number of epochs to train", default=200
+        "--num-epochs", type=int, help="number of epochs to train", default=205
     )
     parser.add_argument(
         "--save-period",
         type=int,
         help="epoch frequency to save model checkpoints",
-        default=2,
+        default=1,
     )
     parser.add_argument("--save-best", action="store_true", help="save best weights")
     parser.add_argument(
         "--val-period",
         type=int,
         help="epoch frequency for running validation (zero if none)",
-        default=0,
+        default=1,
     )
     parser.add_argument("--batch-size", type=int, help="batch size", default=4)
     parser.add_argument(
@@ -71,6 +71,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--backbone", type=str, default="resnet34")
     parser.add_argument("--learning-rate", type=float, default=0.0001)
+    parser.add_argument("--weight-decay", type=float, default=0.0005)
+    parser.add_argument("--T-max", type=int, default=5)
     parser.add_argument(
         "--sample-size",
         type=int,
@@ -124,11 +126,13 @@ if __name__ == "__main__":
         help="fold",
         default=0,
     )
+    parser.add_argument("--distributed", action="store_true", help="distributed training")
 
     args = parser.parse_args()
+    print(args)
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
-
+    
     if args.train:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
         train(args)

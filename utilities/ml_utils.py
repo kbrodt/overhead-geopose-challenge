@@ -10,6 +10,8 @@ import torch
 
 from tqdm import tqdm
 
+import albumentations as A
+import apex
 import json
 import cv2
 import pandas as pd
@@ -40,6 +42,31 @@ from utilities.unet_vflow import UnetVFLOW
 
 RNG = np.random.RandomState(4321)
 
+p = 0.5
+albu_train = A.Compose([
+    A.RandomCrop(512, 512),
+    
+    # A.Flip(p=p),
+    # A.RandomRotate90(p=p),
+    
+    A.OneOf([
+        A.MotionBlur(p=p),
+        A.MedianBlur(blur_limit=3, p=p),
+        A.Blur(blur_limit=3, p=p),
+    ], p=p),
+    A.OneOf([
+        A.RandomBrightnessContrast(p=1),
+        A.RandomGamma(p=1),
+    ], p=p),
+    
+    A.OneOf([
+        A.GaussianBlur(p=1),
+        A.GaussNoise(p=1),
+        A.IAAAdditiveGaussianNoise(p=1),
+    ], p=p),
+])
+
+
 
 class Dataset(BaseDataset):
     def __init__(
@@ -47,12 +74,15 @@ class Dataset(BaseDataset):
         sub_dir,
         args,
         rng=RNG,
+        is_val=False,
     ):
 
         self.is_test = False
+        self.is_val = is_val
         self.rng = rng
         if isinstance(sub_dir, str):
             assert sub_dir == args.test_sub_dir
+            assert self.is_val
             self.is_test = sub_dir == args.test_sub_dir
         
             # create all paths with respect to RGB path ordering to maintain alignment of samples
@@ -104,7 +134,7 @@ class Dataset(BaseDataset):
             agl = load_image(agl_path, self.args)
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
-            if self.args.augmentation:
+            if (not self.is_val) and self.args.augmentation:
                 image, mag, xdir, ydir, agl, scale = augment_vflow(
                     image,
                     mag,
@@ -113,6 +143,10 @@ class Dataset(BaseDataset):
                     vflow_data["angle"],
                     vflow_data["scale"],
                     agl=agl,
+                    rotate_prob=0.5,
+                    flip_prob=0.5,
+                    scale_prob=0.5,
+                    agl_prob=0.5,
                 )
             xdir = np.float32(xdir)
             ydir = np.float32(ydir)
@@ -132,7 +166,10 @@ class Dataset(BaseDataset):
                 interpolation=cv2.INTER_NEAREST,
             )
 
-        # TODO: augment img
+        if (not self.is_test) and (not self.is_val):
+            data = albu_train(image=image, masks=[mag, agl])
+            image = data["image"]
+            mag, agl = data["masks"]
 
         image = self.preprocessing_fn(image).astype("float32")
         image = np.transpose(image, (2, 0, 1))
@@ -310,6 +347,8 @@ class Epoch:
                 "VAL Angle RMS: %.2f; AGL RMS: %.2f, R^2: %.4f; MAG RMS: %.2f, R^2: %.4f; Scale RMS: %.4f"
                 % (angle_rms, agl_rms, r2_agl, mag_rms, r2_mag, scale_rms)
             )
+            
+            logs['score'] = r2_agl
 
         return logs
 
@@ -323,6 +362,7 @@ class TrainEpoch(Epoch):
         angle_loss,
         scale_loss,
         optimizer,
+        scaler=None,
         device="cpu",
         verbose=True,
     ):
@@ -337,29 +377,50 @@ class TrainEpoch(Epoch):
             verbose=verbose,
         )
         self.optimizer = optimizer
+        self.scaler = scaler
 
     def on_epoch_start(self):
         self.model.train()
 
     def batch_update(self, x, y):
         self.optimizer.zero_grad()
-        xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x.float())
+        
+        if self.scaler is not None:
+            with torch.cuda.amp.autocast():
+                xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x)
+                scale_pred = torch.unsqueeze(scale_pred, 1)
 
-        scale_pred = torch.unsqueeze(scale_pred, 1)
+                xydir, agl, mag, scale = y
+                loss_agl = self.dense_loss(agl_pred, agl)
+                loss_mag = self.dense_loss(mag_pred, mag)
+                loss_angle = self.angle_loss(xydir_pred, xydir)
 
-        xydir, agl, mag, scale = y
-        loss_agl = self.dense_loss(agl_pred, agl)
-        loss_mag = self.dense_loss(mag_pred, mag)
-        loss_angle = self.angle_loss(xydir_pred, xydir)
+                loss_scale = self.scale_loss(scale_pred, scale)
 
-        loss_scale = self.scale_loss(scale_pred, scale)
+                loss_combined = (
+                    self.args.agl_weight * loss_agl
+                    + self.args.mag_weight * loss_mag
+                    + self.args.angle_weight * loss_angle
+                    + self.args.scale_weight * loss_scale
+                )
+        else:
+            xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x)
 
-        loss_combined = (
-            self.args.agl_weight * loss_agl
-            + self.args.mag_weight * loss_mag
-            + self.args.angle_weight * loss_angle
-            + self.args.scale_weight * loss_scale
-        )
+            scale_pred = torch.unsqueeze(scale_pred, 1)
+
+            xydir, agl, mag, scale = y
+            loss_agl = self.dense_loss(agl_pred, agl)
+            loss_mag = self.dense_loss(mag_pred, mag)
+            loss_angle = self.angle_loss(xydir_pred, xydir)
+
+            loss_scale = self.scale_loss(scale_pred, scale)
+
+            loss_combined = (
+                self.args.agl_weight * loss_agl
+                + self.args.mag_weight * loss_mag
+                + self.args.angle_weight * loss_angle
+                + self.args.scale_weight * loss_scale
+            )
 
         loss = {
             "combined": loss_combined,
@@ -369,8 +430,13 @@ class TrainEpoch(Epoch):
             "scale": loss_scale,
         }
 
-        loss_combined.backward()
-        self.optimizer.step()
+        if self.scaler is None:
+            loss_combined.backward()
+            self.optimizer.step()
+        else:
+            self.scaler.scale(loss_combined).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
 
         return loss, xydir_pred, agl_pred, mag_pred, scale_pred
 
@@ -446,19 +512,34 @@ def train(args):
     torch.backends.cudnn.benchmark = True
 
     model = build_model(args)
+    if args.distributed:
+        # By default, apex.parallel.DistributedDataParallel overlaps communication with
+        # computation in the backward pass.
+        # model = DDP(model)
+        # delay_allreduce delays all communication to the end of the backward pass.
+        model = apex.parallel.convert_syncbn_model(model)
+        model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
     
     df = pd.read_csv(args.train_path_df)
     train_df, dev_df = train_dev_split(df, args)
 
-    train_dataset = Dataset(train_df, args=args)
-    val_dataset = Dataset(dev_df, args=args)
+    train_dataset = Dataset(train_df, args=args, is_val=False)
+    val_dataset = Dataset(dev_df, args=args, is_val=True)
 
+    train_sampler = None
+    val_sampler = None
+    if args.distributed:
+        train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+
+    args.num_workers = min(max(args.num_workers, args.batch_size), 16)
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
         shuffle=True,
         num_workers=args.num_workers,
         pin_memory=True,
+        sampler=train_sampler,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -466,13 +547,24 @@ def train(args):
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
+        sampler=val_sampler,
     )
 
-    optimizer = torch.optim.Adam(
+    optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
         [
             dict(params=model.parameters(), lr=args.learning_rate),
-        ]
+        ],
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
     )
+    
+    scheduler = None
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
+    )
+    
+    scaler = None
+    scaler = torch.cuda.amp.GradScaler()
 
     dense_loss = NoNaNMSE()
     angle_loss = MSELoss()
@@ -485,6 +577,7 @@ def train(args):
         angle_loss=angle_loss,
         scale_loss=scale_loss,
         optimizer=optimizer,
+        scaler=scaler,
         device="cuda",
     )
 
@@ -493,8 +586,31 @@ def train(args):
         args=args,
         device="cuda",
     )
+    
+    Path(args.checkpoint_dir).mkdir(exist_ok=True, parents=True)
+    best_score = 0
+    def saver(path):
+        torch.save(
+            {
+                "epoch": epoch,
+                "best_score": best_score,
+                "history": history,
+                "state_dict": model.state_dict(),
+                "opt_state_dict": optimizer.state_dict(),
+                "sched_state_dict": scheduler.state_dict()
+                if scheduler is not None
+                else None,
+                "scaler": scaler.state_dict()
+                if scaler is not None
+                else None,
+                "args": args,
+            },
+            path,
+        )
 
     for i in range(args.num_epochs):
+        if args.distributed:
+            train_sampler.set_epoch(i)
 
         print("\nEpoch: {}".format(i))
         train_logs = train_epoch.run(train_loader)
@@ -507,15 +623,15 @@ def train(args):
                 model.state_dict(),
                 os.path.join(args.checkpoint_dir, "./model_%d.pth" % i),
             )
+        
+        if scheduler is not None:
+            scheduler.step()
 
         # save best epoch
-        if args.save_best:
-            combined_loss = train_logs["combined"]
-            if i == 0:
-                best_loss = combined_loss
-            if combined_loss <= best_loss:
-                torch.save(
-                    model.state_dict(),
+        if args.val_period > 0 and args.save_best:
+            if valid_logs["score"] > best_score:
+                best_score = valid_logs["score"]
+                saver(
                     os.path.join(args.checkpoint_dir, "./model_best.pth"),
                 )
 
@@ -539,9 +655,9 @@ def test(args):
     model.eval()
     with torch.no_grad():
 
-        test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args)
+        test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args, is_val=True)
         test_loader = DataLoader(
-            test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=1
+            test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4,
         )
         predictions_dir = Path(args.predictions_dir)
         for images, rgb_paths in tqdm(test_loader):
