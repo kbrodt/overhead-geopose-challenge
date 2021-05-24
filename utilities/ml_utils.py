@@ -12,8 +12,10 @@ from tqdm import tqdm
 
 import json
 import cv2
+import pandas as pd
 
 from segmentation_models_pytorch.utils.meter import AverageValueMeter
+from sklearn.model_selection import StratifiedKFold
 
 from pathlib import Path
 from PIL import Image
@@ -47,21 +49,28 @@ class Dataset(BaseDataset):
         rng=RNG,
     ):
 
-        self.is_test = sub_dir == args.test_sub_dir
+        self.is_test = False
         self.rng = rng
-
-        # create all paths with respect to RGB path ordering to maintain alignment of samples
-        dataset_dir = Path(args.dataset_dir) / sub_dir
-        rgb_paths = list(dataset_dir.glob(f"*_RGB.{args.rgb_suffix}"))
-        if rgb_paths == []: rgb_paths = list(dataset_dir.glob(f"*_RGB*.{args.rgb_suffix}")) # original file names
-        agl_paths = list(
-            pth.with_name(pth.name.replace("_RGB", "_AGL")).with_suffix(".tif")
-            for pth in rgb_paths
-        )
-        vflow_paths = list(
-            pth.with_name(pth.name.replace("_RGB", "_VFLOW")).with_suffix(".json")
-            for pth in rgb_paths
-        )
+        if isinstance(sub_dir, str):
+            assert sub_dir == args.test_sub_dir
+            self.is_test = sub_dir == args.test_sub_dir
+        
+            # create all paths with respect to RGB path ordering to maintain alignment of samples
+            dataset_dir = Path(args.dataset_dir) / sub_dir
+            rgb_paths = list(dataset_dir.glob(f"*_RGB.{args.rgb_suffix}"))
+            if rgb_paths == []: rgb_paths = list(dataset_dir.glob(f"*_RGB*.{args.rgb_suffix}")) # original file names
+            agl_paths = list(
+                pth.with_name(pth.name.replace("_RGB", "_AGL")).with_suffix(".tif")
+                for pth in rgb_paths
+            )
+            vflow_paths = list(
+                pth.with_name(pth.name.replace("_RGB", "_VFLOW")).with_suffix(".json")
+                for pth in rgb_paths
+            )
+        else:
+            rgb_paths = sub_dir.rgb.apply(lambda x: (Path(args.dataset_dir) / x).with_suffix(f'.{args.rgb_suffix}')).tolist()
+            agl_paths = sub_dir.agl.apply(lambda x: Path(args.dataset_dir) / x).tolist()
+            vflow_paths = sub_dir.json.apply(lambda x: Path(args.dataset_dir) / x).tolist()
 
         if self.is_test:
             self.paths_list = rgb_paths
@@ -82,7 +91,7 @@ class Dataset(BaseDataset):
         )
 
         self.args = args
-        self.sub_dir = sub_dir
+        # self.sub_dir = sub_dir
 
     def __getitem__(self, i):
 
@@ -122,6 +131,8 @@ class Dataset(BaseDataset):
                 ),
                 interpolation=cv2.INTER_NEAREST,
             )
+
+        # TODO: augment img
 
         image = self.preprocessing_fn(image).astype("float32")
         image = np.transpose(image, (2, 0, 1))
@@ -401,9 +412,33 @@ class NoNaNMSE(smp.utils.base.Loss):
 class MSELoss(smp.utils.base.Loss):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self.mse = torch.nn.MSELoss()
 
     def forward(self, output, target):
-        return torch.nn.MSELoss()(output, target)
+        return self.mse(output, target)
+    
+    
+class L1SmoothLoss(smp.utils.base.Loss):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.l1 = torch.nn.SmoothL1Loss()
+
+    def forward(self, output, target):
+        return self.l1(output, target)
+    
+    
+def train_dev_split(geopose, args):
+    geopose['area'] = geopose.rgb.str.split('_').str[0]
+    geopose['fold'] = None
+
+    n_col = len(geopose.columns) - 1
+    skf = StratifiedKFold(n_splits=args.n_folds, shuffle=True, random_state=args.random_state)
+    for fold, (_, dev_index) in enumerate(skf.split(geopose, geopose.area)):
+        geopose.iloc[dev_index, n_col] = fold
+        
+    train, dev = geopose[geopose.fold != args.fold].copy(), geopose[geopose.fold == args.fold].copy()
+
+    return train, dev
 
 
 def train(args):
@@ -411,9 +446,12 @@ def train(args):
     torch.backends.cudnn.benchmark = True
 
     model = build_model(args)
+    
+    df = pd.read_csv(args.train_path_df)
+    train_df, dev_df = train_dev_split(df, args)
 
-    train_dataset = Dataset(sub_dir=args.train_sub_dir, args=args)
-    val_dataset = Dataset(sub_dir=args.valid_sub_dir, args=args)
+    train_dataset = Dataset(train_df, args=args)
+    val_dataset = Dataset(dev_df, args=args)
 
     train_loader = DataLoader(
         train_dataset,

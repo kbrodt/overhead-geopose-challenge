@@ -55,6 +55,12 @@ if __name__ == "__main__":
         default="train",
     )
     parser.add_argument(
+        "--train-path-df",
+        type=str,
+        help="path to train df",
+        default="geopose_train.csv",
+    )
+    parser.add_argument(
         "--test-sub-dir", type=str, help="test folder within datset-dir", default="test"
     )
     parser.add_argument(
@@ -99,6 +105,24 @@ if __name__ == "__main__":
         type=bool,
         help="Whether to process predictions by converting to cm and compressing",
         default=True,
+    )
+    parser.add_argument(
+        "--random-state",
+        type=int,
+        help="random seed",
+        default=314159,
+    )
+    parser.add_argument(
+        "--n-folds",
+        type=int,
+        help="number of folds",
+        default=10,
+    )
+    parser.add_argument(
+        "--fold",
+        type=int,
+        help="fold",
+        default=0,
     )
 
     args = parser.parse_args()
