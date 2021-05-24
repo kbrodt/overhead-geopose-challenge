@@ -3,6 +3,7 @@ from osgeo import gdal
 import numpy as np
 import json
 import os
+import cv2
 from tqdm import tqdm
 from PIL import Image
 
@@ -38,13 +39,19 @@ def load_image(
     args,
     dtype_out="float32",
     units_per_meter_conversion_factors=UNITS_PER_METER_CONVERSION_FACTORS,
+    use_cv=False,
 ):
 
     image_path = Path(image_path)
     if not image_path.exists():
         return None
-    image = gdal.Open(str(image_path))
-    image = image.ReadAsArray()
+    
+    if use_cv:
+        image = cv2.imread(str(image_path))
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+    else:
+        image = gdal.Open(str(image_path))
+        image = image.ReadAsArray()
 
     # convert AGL units and fill nan placeholder with nan
     if "AGL" in image_path.name:
@@ -55,7 +62,7 @@ def load_image(
         image = (image / units_per_meter).astype(dtype_out)
 
     # transpose if RGB
-    if len(image.shape) == 3:
+    if (not use_cv) and len(image.shape) == 3:
         image = np.transpose(image, [1, 2, 0])
 
     return image

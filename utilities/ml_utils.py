@@ -533,14 +533,16 @@ def test(args):
                 # agl pred
                 curr_agl_pred = agl_pred[batch_ind, 0, :, :]
                 curr_agl_pred[curr_agl_pred < 0] = 0
-                agl_resized = cv2.resize(
-                    curr_agl_pred,
-                    (
-                        curr_agl_pred.shape[0] * args.downsample,  # upsample
-                        curr_agl_pred.shape[1] * args.downsample,  # upsample
-                    ),
-                    interpolation=cv2.INTER_NEAREST,
-                )
+                agl_resized = curr_agl_pred
+                if args.downsample > 1:
+                    agl_resized = cv2.resize(
+                        curr_agl_pred,
+                        (
+                            curr_agl_pred.shape[0] * args.downsample,  # upsample
+                            curr_agl_pred.shape[1] * args.downsample,  # upsample
+                        ),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
 
                 # save
                 rgb_path = predictions_dir / Path(rgb_paths[batch_ind]).name
