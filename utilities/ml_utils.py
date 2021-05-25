@@ -166,6 +166,7 @@ class Dataset(BaseDataset):
                 interpolation=cv2.INTER_NEAREST,
             )
 
+        image = image.astype("uint8")
         if (not self.is_test) and (not self.is_val):
             data = albu_train(image=image, masks=[mag, agl])
             image = data["image"]
@@ -543,7 +544,7 @@ def train(args):
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=args.batch_size,
+        batch_size=max(args.batch_size // 4, 1),
         shuffle=False,
         num_workers=args.num_workers,
         pin_memory=True,
@@ -587,14 +588,13 @@ def train(args):
         device="cuda",
     )
     
-    Path(args.checkpoint_dir).mkdir(exist_ok=True, parents=True)
     best_score = 0
     def saver(path):
         torch.save(
             {
-                "epoch": epoch,
+                "epoch": i,
                 "best_score": best_score,
-                "history": history,
+                # "history": history,
                 "state_dict": model.state_dict(),
                 "opt_state_dict": optimizer.state_dict(),
                 "sched_state_dict": scheduler.state_dict()
