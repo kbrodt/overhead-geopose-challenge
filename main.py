@@ -127,6 +127,7 @@ if __name__ == "__main__":
         default=0,
     )
     parser.add_argument("--distributed", action="store_true", help="distributed training")
+    parser.add_argument("--resume", type=str, default="", help="path to pretrained model to resume training")
 
     args = parser.parse_args()
     print(args)

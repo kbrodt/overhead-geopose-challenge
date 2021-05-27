@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import sys
+from collections import OrderedDict
 
 from glob import glob
 from pathlib import Path
@@ -508,7 +509,41 @@ def train_dev_split(geopose, args):
     return train, dev
 
 
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def init_dist(args):
+    # to autotune convolutions and other algorithms
+    # to pick the best for current configuration
+    torch.backends.cudnn.benchmark = True
+
+    if args.train.deterministic:
+        set_seed(args.train.seed)
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
+        torch.set_printoptions(precision=10)
+
+    args.dist.distributed = False
+    if "WORLD_SIZE" in os.environ:
+        args.dist.distributed = int(os.environ["WORLD_SIZE"]) > 1
+
+    args.dist.gpu = 0
+    args.dist.world_size = 1
+    if args.dist.distributed:
+        args.dist.gpu = args.dist.local_rank
+        torch.cuda.set_device(args.gpu)
+        torch.distributed.init_process_group(backend="nccl", init_method="env://")
+        args.dist.world_size = torch.distributed.get_world_size()
+
+    assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
+
+
 def train(args):
+
+    # init_dist(args)
 
     torch.backends.cudnn.benchmark = True
 
@@ -608,7 +643,46 @@ def train(args):
             path,
         )
 
-    for i in range(args.num_epochs):
+    start_epoch = 0
+    # Optionally resume from a checkpoint
+    if args.resume:
+        # Use a local scope to avoid dangling references
+        def _resume():
+            nonlocal start_epoch, best_score
+            path_to_resume = Path(args.resume).expanduser()
+            if path_to_resume.is_file():
+                print(f"=> loading resume checkpoint '{path_to_resume}'")
+                checkpoint = torch.load(
+                    path_to_resume,
+                    map_location=lambda storage, loc: storage.cuda(0),  # change here!
+                )
+                start_epoch = checkpoint["epoch"] + 1
+                # history = checkpoint["history"]
+                # best_score = max(history["score"]["dev"])
+                best_score = checkpoint["best_score"]
+                new_state_dict = OrderedDict()
+                for k, v in checkpoint["state_dict"].items():
+                    name = k[7:] if k.startswith('module') else k
+                    new_state_dict[name] = v
+
+                model.load_state_dict(new_state_dict)
+                optimizer.load_state_dict(checkpoint["opt_state_dict"])
+                if checkpoint["sched_state_dict"] is not None:
+                    scheduler.load_state_dict(checkpoint["sched_state_dict"])
+
+                if checkpoint["scaler"] is not None:
+                    scaler.load_state_dict(checkpoint["scaler"])
+
+                print(
+                    f"=> resume from checkpoint '{path_to_resume}' (epoch {checkpoint['epoch']})"
+                )
+            else:
+                print(f"=> no checkpoint found at '{path_to_resume}'")
+
+        _resume()
+
+
+    for i in range(start_epoch, args.num_epochs):
         if args.distributed:
             train_sampler.set_epoch(i)
 
@@ -619,9 +693,12 @@ def train(args):
             valid_logs = val_epoch.run(val_loader)
 
         if ((i + 1) % args.save_period) == 0:
-            torch.save(
-                model.state_dict(),
-                os.path.join(args.checkpoint_dir, "./model_%d.pth" % i),
+            # torch.save(
+            #     model.state_dict(),
+            #     os.path.join(args.checkpoint_dir, "./model_%d.pth" % i),
+            # )
+            saver(
+                os.path.join(args.checkpoint_dir, "./model_last.pth"),
             )
         
         if scheduler is not None:
@@ -650,14 +727,15 @@ def test(args):
 
     model = build_model(args)
     checkpoint = torch.load(model_path)
-    model.load_state_dict(checkpoint)
+    model.load_state_dict(checkpoint["state_dict"])
     model.to("cuda")
     model.eval()
     with torch.no_grad():
 
         test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args, is_val=True)
+        args.num_workers = min(max(args.num_workers, args.batch_size), 16)
         test_loader = DataLoader(
-            test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4,
+            test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
         )
         predictions_dir = Path(args.predictions_dir)
         for images, rgb_paths in tqdm(test_loader):
