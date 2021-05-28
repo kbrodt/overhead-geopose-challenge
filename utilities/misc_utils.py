@@ -47,8 +47,9 @@ def load_image(
         return None
     
     if use_cv:
-        image = cv2.imread(str(image_path))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        image = cv2.imread(str(image_path), -1)
+        if len(image.shape) == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     else:
         image = gdal.Open(str(image_path))
         image = image.ReadAsArray()

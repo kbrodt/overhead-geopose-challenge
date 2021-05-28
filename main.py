@@ -126,13 +126,20 @@ if __name__ == "__main__":
         help="fold",
         default=0,
     )
+    parser.add_argument(
+        "--local_rank",
+        type=int,
+        help="fold",
+        default=0,
+    )
     parser.add_argument("--distributed", action="store_true", help="distributed training")
+    parser.add_argument("--deterministic", action="store_true", help="deterministic training")
     parser.add_argument("--resume", type=str, default="", help="path to pretrained model to resume training")
 
     args = parser.parse_args()
     print(args)
 
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
+    # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
     
     if args.train:
         os.makedirs(args.checkpoint_dir, exist_ok=True)

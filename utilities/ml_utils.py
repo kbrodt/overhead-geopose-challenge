@@ -196,6 +196,7 @@ class Epoch:
         stage_name=None,
         device="cpu",
         verbose=True,
+        local_rank=0,
     ):
         self.args = args
         self.model = model
@@ -205,6 +206,7 @@ class Epoch:
         self.stage_name = stage_name
         self.verbose = verbose
         self.device = device
+        self.local_rank = local_rank
 
         self.loss_names = ["combined", "agl", "mag", "angle", "scale"]
 
@@ -331,9 +333,12 @@ class Epoch:
                             np.abs(scale[batch_ind] - scale_pred[batch_ind])
                         )
 
-                if self.verbose:
-                    s = self._format_logs(logs)
-                    iterator.set_postfix_str(s)
+                torch.cuda.synchronize()
+
+                if self.local_rank == 0:
+                    if self.verbose:
+                        s = self._format_logs(logs)
+                        iterator.set_postfix_str(s)
 
         if self.stage_name == "valid":
 
@@ -367,6 +372,7 @@ class TrainEpoch(Epoch):
         scaler=None,
         device="cpu",
         verbose=True,
+        local_rank=0,
     ):
         super().__init__(
             model=model,
@@ -377,6 +383,7 @@ class TrainEpoch(Epoch):
             stage_name="train",
             device=device,
             verbose=verbose,
+            local_rank=local_rank,
         )
         self.optimizer = optimizer
         self.scaler = scaler
@@ -444,13 +451,14 @@ class TrainEpoch(Epoch):
 
 
 class ValidEpoch(Epoch):
-    def __init__(self, model, args, device="cpu", verbose=True):
+    def __init__(self, model, args, device="cpu", verbose=True, local_rank=0):
         super().__init__(
             model=model,
             args=args,
             stage_name="valid",
             device=device,
             verbose=verbose,
+            local_rank=local_rank,
         )
 
     def on_epoch_start(self):
@@ -474,6 +482,18 @@ class NoNaNMSE(smp.utils.base.Loss):
         diff = torch.squeeze(output) - target
         not_nan = ~torch.isnan(diff)
         loss = torch.mean(diff.masked_select(not_nan) ** 2)
+        return loss
+
+
+class AngleLoss(smp.utils.base.Loss):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        pass
+
+    def forward(self, output, target):
+        dot = (output * target).sum(-1)
+        loss = torch.mean((dot - 1) ** 2)
+
         return loss
 
 
@@ -520,30 +540,31 @@ def init_dist(args):
     # to pick the best for current configuration
     torch.backends.cudnn.benchmark = True
 
-    if args.train.deterministic:
-        set_seed(args.train.seed)
+    if args.deterministic:
+        set_seed(args.random_state)
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
         torch.set_printoptions(precision=10)
 
-    args.dist.distributed = False
+    args.distributed = False
     if "WORLD_SIZE" in os.environ:
-        args.dist.distributed = int(os.environ["WORLD_SIZE"]) > 1
+        args.distributed = int(os.environ["WORLD_SIZE"]) > 1
 
-    args.dist.gpu = 0
-    args.dist.world_size = 1
-    if args.dist.distributed:
-        args.dist.gpu = args.dist.local_rank
+    args.gpu = 0
+    args.world_size = 1
+    if args.distributed:
+        args.gpu = args.local_rank
         torch.cuda.set_device(args.gpu)
         torch.distributed.init_process_group(backend="nccl", init_method="env://")
-        args.dist.world_size = torch.distributed.get_world_size()
+        args.world_size = torch.distributed.get_world_size()
 
     assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
 
 
 def train(args):
 
-    # init_dist(args)
+    if args.distributed:
+        init_dist(args)
 
     torch.backends.cudnn.benchmark = True
 
@@ -554,6 +575,7 @@ def train(args):
         # model = DDP(model)
         # delay_allreduce delays all communication to the end of the backward pass.
         model = apex.parallel.convert_syncbn_model(model)
+        model = model.cuda()
         model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
     
     df = pd.read_csv(args.train_path_df)
@@ -566,24 +588,26 @@ def train(args):
     val_sampler = None
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+        val_sampler = torch.utils.data.distributed.DistributedSampler(
+            val_dataset, num_replicas=1, rank=0,
+        )
 
     args.num_workers = min(max(args.num_workers, args.batch_size), 16)
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
-        shuffle=True,
+        shuffle=train_sampler is None,
+        sampler=train_sampler,
         num_workers=args.num_workers,
         pin_memory=True,
-        sampler=train_sampler,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=max(args.batch_size // 4, 1),
         shuffle=False,
+        sampler=val_sampler,
         num_workers=args.num_workers,
         pin_memory=True,
-        sampler=val_sampler,
     )
 
     optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
@@ -603,7 +627,7 @@ def train(args):
     scaler = torch.cuda.amp.GradScaler()
 
     dense_loss = NoNaNMSE()
-    angle_loss = MSELoss()
+    angle_loss = AngleLoss()  # MSELoss()
     scale_loss = MSELoss()
 
     train_epoch = TrainEpoch(
@@ -615,12 +639,14 @@ def train(args):
         optimizer=optimizer,
         scaler=scaler,
         device="cuda",
+        local_rank=args.local_rank,
     )
 
     val_epoch = ValidEpoch(
         model,
         args=args,
         device="cuda",
+        local_rank=args.local_rank,
     )
     
     best_score = 0
@@ -686,31 +712,34 @@ def train(args):
         if args.distributed:
             train_sampler.set_epoch(i)
 
-        print("\nEpoch: {}".format(i))
+        if args.local_rank == 0:
+            print("\nEpoch: {}".format(i))
         train_logs = train_epoch.run(train_loader)
 
         if args.val_period > 0 and ((i + 1) % args.val_period) == 0:
             valid_logs = val_epoch.run(val_loader)
 
-        if ((i + 1) % args.save_period) == 0:
-            # torch.save(
-            #     model.state_dict(),
-            #     os.path.join(args.checkpoint_dir, "./model_%d.pth" % i),
-            # )
-            saver(
-                os.path.join(args.checkpoint_dir, "./model_last.pth"),
-            )
+        if args.local_rank == 0:
+            if ((i + 1) % args.save_period) == 0:
+                # torch.save(
+                #     model.state_dict(),
+                #     os.path.join(args.checkpoint_dir, "./model_%d.pth" % i),
+                # )
+                saver(
+                    os.path.join(args.checkpoint_dir, "./model_last.pth"),
+                )
         
         if scheduler is not None:
             scheduler.step()
 
-        # save best epoch
-        if args.val_period > 0 and args.save_best:
-            if valid_logs["score"] > best_score:
-                best_score = valid_logs["score"]
-                saver(
-                    os.path.join(args.checkpoint_dir, "./model_best.pth"),
-                )
+        if args.local_rank == 0:
+            # save best epoch
+            if args.val_period > 0 and args.save_best:
+                if valid_logs["score"] > best_score:
+                    best_score = valid_logs["score"]
+                    saver(
+                        os.path.join(args.checkpoint_dir, "./model_best.pth"),
+                    )
 
 
 def test(args):
