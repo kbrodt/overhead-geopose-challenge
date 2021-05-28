@@ -16,6 +16,7 @@ import apex
 import json
 import cv2
 import pandas as pd
+import pickle
 
 from segmentation_models_pytorch.utils.meter import AverageValueMeter
 from sklearn.model_selection import StratifiedKFold
@@ -122,7 +123,6 @@ class Dataset(BaseDataset):
         )
 
         self.args = args
-        # self.sub_dir = sub_dir
 
     def __getitem__(self, i):
 
@@ -248,114 +248,122 @@ class Epoch:
             mag_rms = []
             scale_errors = []
 
-        with tqdm(
-            dataloader,
-            desc=self.stage_name,
-            file=sys.stdout,
-            disable=not (self.verbose),
-        ) as iterator:
-            for itr_data in iterator:
-                image, xydir, agl, mag, scale = itr_data
-                scale = torch.unsqueeze(scale, 1)
+        if self.local_rank == 0:
+            iterator = tqdm(
+                total=len(dataloader),
+                desc=self.stage_name,
+                file=sys.stdout,
+                disable=not (self.verbose),
+            )
 
-                image = image.to(self.device)
+        for itr_data in dataloader:
+            image, xydir, agl, mag, scale = itr_data
+            scale = torch.unsqueeze(scale, 1)
 
-                if self.stage_name != "valid":
-                    xydir, agl, mag, scale = (
-                        xydir.to(self.device),
-                        agl.to(self.device),
-                        mag.to(self.device),
-                        scale.to(self.device),
+            image = image.to(self.device, non_blocking=True)
+
+            if self.stage_name != "valid":
+                xydir, agl, mag, scale = (
+                    xydir.to(self.device, non_blocking=True),
+                    agl.to(self.device, non_blocking=True),
+                    mag.to(self.device, non_blocking=True),
+                    scale.to(self.device, non_blocking=True),
+                )
+                y = [xydir, agl, mag, scale]
+
+                (
+                    loss,
+                    xydir_pred,
+                    agl_pred,
+                    mag_pred,
+                    scale_pred,
+                ) = self.batch_update(image, y)
+
+                loss_logs = {}
+
+                for name in self.loss_names:
+                    curr_loss = loss[name].cpu().detach().numpy()
+                    if name == "scale":
+                        curr_loss = np.mean(curr_loss)
+                    loss_meters[name].add(curr_loss)
+                    loss_logs[name] = loss_meters[name].mean
+
+                logs.update(loss_logs)
+            else:
+
+                xydir_pred, agl_pred, mag_pred, scale_pred = self.batch_update(
+                    image
+                )
+
+                xydir = xydir.cpu().detach().numpy()
+                agl = agl.cpu().detach().numpy()
+                mag = mag.cpu().detach().numpy()
+                scale = scale.cpu().detach().numpy()
+
+                xydir_pred = xydir_pred.cpu().detach().numpy()
+                agl_pred = agl_pred.cpu().detach().numpy()
+                mag_pred = mag_pred.cpu().detach().numpy()
+                scale_pred = scale_pred.cpu().detach().numpy()
+
+                for batch_ind in range(agl.shape[0]):
+
+                    count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
+                        agl[batch_ind, :, :], agl_pred[batch_ind, :, :]
                     )
-                    y = [xydir, agl, mag, scale]
+                    agl_count += count
+                    agl_error_sum += error_sum
+                    agl_rms.append(rms)
+                    agl_sum += data_sum
+                    agl_gt_sq_sum += gt_sq_sum
 
-                    (
-                        loss,
-                        xydir_pred,
-                        agl_pred,
-                        mag_pred,
-                        scale_pred,
-                    ) = self.batch_update(image, y)
+                    count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
+                        mag[batch_ind, :, :], mag_pred[batch_ind, :, :]
+                    )
+                    mag_count += count
+                    mag_error_sum += error_sum
+                    mag_rms.append(rms)
+                    mag_sum += data_sum
+                    mag_gt_sq_sum += gt_sq_sum
 
-                    loss_logs = {}
+                    dir_pred = xydir_pred[batch_ind, :]
+                    dir_gt = xydir[batch_ind, :]
 
-                    for name in self.loss_names:
-                        curr_loss = loss[name].cpu().detach().numpy()
-                        if name == "scale":
-                            curr_loss = np.mean(curr_loss)
-                        loss_meters[name].add(curr_loss)
-                        loss_logs[name] = loss_meters[name].mean
+                    angle_error = get_angle_error(dir_pred, dir_gt)
 
-                    logs.update(loss_logs)
-                else:
-
-                    xydir_pred, agl_pred, mag_pred, scale_pred = self.batch_update(
-                        image
+                    angle_errors.append(angle_error)
+                    scale_errors.append(
+                        np.abs(scale[batch_ind] - scale_pred[batch_ind])
                     )
 
-                    xydir = xydir.cpu().detach().numpy()
-                    agl = agl.cpu().detach().numpy()
-                    mag = mag.cpu().detach().numpy()
-                    scale = scale.cpu().detach().numpy()
+            torch.cuda.synchronize()
 
-                    xydir_pred = xydir_pred.cpu().detach().numpy()
-                    agl_pred = agl_pred.cpu().detach().numpy()
-                    mag_pred = mag_pred.cpu().detach().numpy()
-                    scale_pred = scale_pred.cpu().detach().numpy()
-
-                    for batch_ind in range(agl.shape[0]):
-
-                        count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
-                            agl[batch_ind, :, :], agl_pred[batch_ind, :, :]
-                        )
-                        agl_count += count
-                        agl_error_sum += error_sum
-                        agl_rms.append(rms)
-                        agl_sum += data_sum
-                        agl_gt_sq_sum += gt_sq_sum
-
-                        count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
-                            mag[batch_ind, :, :], mag_pred[batch_ind, :, :]
-                        )
-                        mag_count += count
-                        mag_error_sum += error_sum
-                        mag_rms.append(rms)
-                        mag_sum += data_sum
-                        mag_gt_sq_sum += gt_sq_sum
-
-                        dir_pred = xydir_pred[batch_ind, :]
-                        dir_gt = xydir[batch_ind, :]
-
-                        angle_error = get_angle_error(dir_pred, dir_gt)
-
-                        angle_errors.append(angle_error)
-                        scale_errors.append(
-                            np.abs(scale[batch_ind] - scale_pred[batch_ind])
-                        )
-
-                torch.cuda.synchronize()
-
-                if self.local_rank == 0:
-                    if self.verbose:
-                        s = self._format_logs(logs)
-                        iterator.set_postfix_str(s)
+            if self.local_rank == 0 and self.verbose:
+                s = self._format_logs(logs)
+                iterator.set_postfix_str(s)
+                iterator.update()
 
         if self.stage_name == "valid":
-
-            r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
-            r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
-
-            angle_rms = get_rms(angle_errors)
-            scale_rms = get_rms(scale_errors)
-            agl_rms = get_rms(agl_rms)
-            mag_rms = get_rms(mag_rms)
-
-            print(
-                "VAL Angle RMS: %.2f; AGL RMS: %.2f, R^2: %.4f; MAG RMS: %.2f, R^2: %.4f; Scale RMS: %.4f"
-                % (angle_rms, agl_rms, r2_agl, mag_rms, r2_mag, scale_rms)
-            )
             
-            logs['score'] = r2_agl
+            logs.update(dict(
+                agl_error_sum=agl_error_sum,
+                agl_gt_sq_sum=agl_gt_sq_sum,
+                agl_sum=agl_sum,
+                agl_count=agl_count,
+
+                mag_error_sum=mag_error_sum,
+                mag_gt_sq_sum=mag_gt_sq_sum,
+                mag_sum=mag_sum,
+                mag_count=mag_count,
+
+                angle_errors=angle_errors,
+                scale_errors=scale_errors,
+
+                agl_rms=agl_rms,
+                mag_rms=mag_rms,
+            ))
+
+        if self.local_rank == 0:
+            iterator.close()
 
         return logs
 
@@ -466,7 +474,7 @@ class ValidEpoch(Epoch):
 
     def batch_update(self, x):
         with torch.no_grad():
-            xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x.float())
+            xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x)
 
             scale_pred = torch.unsqueeze(scale_pred, 1)
 
@@ -561,6 +569,68 @@ def init_dist(args):
     assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
 
 
+def reduce_tensor(tensor):
+    rt = tensor.clone()
+    torch.distributed.all_reduce(rt, op=torch.distributed.ReduceOp.SUM)
+    rt /= args.world_size
+
+    return rt
+
+
+# https://discuss.pytorch.org/t/how-to-concatenate-different-size-tensors-from-distributed-processes/44819
+# https://github.com/facebookresearch/maskrcnn-benchmark/blob/master/maskrcnn_benchmark/utils/comm.py
+
+def get_world_size():
+    if not torch.distributed.is_available():
+        return 1
+    if not torch.distributed.is_initialized():
+        return 1
+    return torch.distributed.get_world_size()
+
+
+def all_gather(data):
+    """
+    Run all_gather on arbitrary picklable data (not necessarily tensors)
+    Args:
+        data: any picklable object
+    Returns:
+        list[data]: list of data gathered from each rank
+    """
+    world_size = get_world_size()
+    if world_size == 1:
+        return [data]
+
+    # serialized to a Tensor
+    buffer = pickle.dumps(data)
+    storage = torch.ByteStorage.from_buffer(buffer)
+    tensor = torch.ByteTensor(storage).to("cuda")
+
+    # obtain Tensor size of each rank
+    local_size = torch.LongTensor([tensor.numel()]).to("cuda")
+    size_list = [torch.LongTensor([0]).to("cuda") for _ in range(world_size)]
+    torch.distributed.all_gather(size_list, local_size)
+    size_list = [int(size.item()) for size in size_list]
+    max_size = max(size_list)
+
+    # receiving Tensor from all ranks
+    # we pad the tensor because torch all_gather does not support
+    # gathering tensors of different shapes
+    tensor_list = []
+    for _ in size_list:
+        tensor_list.append(torch.ByteTensor(size=(max_size,)).to("cuda"))
+    if local_size != max_size:
+        padding = torch.ByteTensor(size=(max_size - local_size,)).to("cuda")
+        tensor = torch.cat((tensor, padding), dim=0)
+    torch.distributed.all_gather(tensor_list, tensor)
+
+    data_list = []
+    for size, tensor in zip(size_list, tensor_list):
+        buffer = tensor.cpu().numpy().tobytes()[:size]
+        data_list.append(pickle.loads(buffer))
+
+    return data_list
+
+
 def train(args):
 
     if args.distributed:
@@ -588,9 +658,7 @@ def train(args):
     val_sampler = None
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(
-            val_dataset, num_replicas=1, rank=0,
-        )
+        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
 
     args.num_workers = min(max(args.num_workers, args.batch_size), 16)
     train_loader = DataLoader(
@@ -680,7 +748,7 @@ def train(args):
                 print(f"=> loading resume checkpoint '{path_to_resume}'")
                 checkpoint = torch.load(
                     path_to_resume,
-                    map_location=lambda storage, loc: storage.cuda(0),  # change here!
+                    map_location=lambda storage, loc: storage.cuda(args.gpu),  # change here!
                 )
                 start_epoch = checkpoint["epoch"] + 1
                 # history = checkpoint["history"]
@@ -714,32 +782,53 @@ def train(args):
 
         if args.local_rank == 0:
             print("\nEpoch: {}".format(i))
+
         train_logs = train_epoch.run(train_loader)
 
         if args.val_period > 0 and ((i + 1) % args.val_period) == 0:
             valid_logs = val_epoch.run(val_loader)
+            for name in list(valid_logs):
+                valid_logs[name] = all_gather(valid_logs[name])
 
-        if args.local_rank == 0:
-            if ((i + 1) % args.save_period) == 0:
-                # torch.save(
-                #     model.state_dict(),
-                #     os.path.join(args.checkpoint_dir, "./model_%d.pth" % i),
-                # )
-                saver(
-                    os.path.join(args.checkpoint_dir, "./model_last.pth"),
-                )
+        if args.local_rank == 0 and ((i + 1) % args.save_period) == 0:
+            saver(
+                os.path.join(args.checkpoint_dir, "./model_last.pth"),
+            )
         
         if scheduler is not None:
             scheduler.step()
 
-        if args.local_rank == 0:
-            # save best epoch
-            if args.val_period > 0 and args.save_best:
-                if valid_logs["score"] > best_score:
-                    best_score = valid_logs["score"]
-                    saver(
-                        os.path.join(args.checkpoint_dir, "./model_best.pth"),
-                    )
+        # save best epoch
+        if args.local_rank == 0 and args.val_period > 0 and args.save_best:
+            agl_error_sum = sum(valid_logs["agl_error_sum"])
+            agl_gt_sq_sum = sum(valid_logs["agl_gt_sq_sum"])
+            agl_sum = sum(valid_logs["agl_sum"])
+            agl_count = sum(valid_logs["agl_count"])
+            r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
+
+            mag_error_sum = sum(valid_logs["mag_error_sum"])
+            mag_gt_sq_sum = sum(valid_logs["mag_gt_sq_sum"])
+            mag_sum = sum(valid_logs["mag_sum"])
+            mag_count = sum(valid_logs["mag_count"])
+            r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
+
+            angle_rms = get_rms(valid_logs["angle_errors"])
+            scale_rms = get_rms(valid_logs["scale_errors"])
+            agl_rms = get_rms(valid_logs["agl_rms"])
+            mag_rms = get_rms(valid_logs["mag_rms"])
+
+            print(
+                "VAL Angle RMS: %.2f; AGL RMS: %.2f, R^2: %.4f; MAG RMS: %.2f, R^2: %.4f; Scale RMS: %.4f"
+                % (angle_rms, agl_rms, r2_agl, mag_rms, r2_mag, scale_rms)
+            )
+
+            score = r2_agl
+
+            if score > best_score:
+                best_score = score
+                saver(
+                    os.path.join(args.checkpoint_dir, "./model_best.pth"),
+                )
 
 
 def test(args):
@@ -769,7 +858,7 @@ def test(args):
         predictions_dir = Path(args.predictions_dir)
         for images, rgb_paths in tqdm(test_loader):
 
-            images = images.float().to("cuda")
+            images = images.to("cuda", non_blocking=True)
             pred = model(images)
 
             numpy_preds = []
