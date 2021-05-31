@@ -128,7 +128,7 @@ class Dataset(BaseDataset):
 
         if self.is_test:
             rgb_path = self.paths_list[i]
-            image = load_image(rgb_path, self.args)
+            image = load_image(rgb_path, self.args, use_cv=True)
         else:
             rgb_path, vflow_path, agl_path = self.paths_list[i]
             image = load_image(rgb_path, self.args)
@@ -644,7 +644,7 @@ def train(args):
         # computation in the backward pass.
         # model = DDP(model)
         # delay_allreduce delays all communication to the end of the backward pass.
-        model = apex.parallel.convert_syncbn_model(model)
+        # model = apex.parallel.convert_syncbn_model(model)
         model = model.cuda()
         model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
     
@@ -845,7 +845,12 @@ def test(args):
 
     model = build_model(args)
     checkpoint = torch.load(model_path)
-    model.load_state_dict(checkpoint["state_dict"])
+    new_state_dict = OrderedDict()
+    for k, v in checkpoint["state_dict"].items():
+        name = k[7:] if k.startswith('module') else k
+        new_state_dict[name] = v
+
+    model.load_state_dict(new_state_dict)
     model.to("cuda")
     model.eval()
     with torch.no_grad():
