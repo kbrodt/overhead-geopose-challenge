@@ -8,6 +8,7 @@ from pathlib import Path
 
 import segmentation_models_pytorch as smp
 import torch
+import lmdb
 
 from tqdm import tqdm
 
@@ -122,6 +123,15 @@ class Dataset(BaseDataset):
             args.backbone, "imagenet"
         )
 
+        if args.lmdb is not None:
+            self.env = lmdb.open(
+                str(args.lmdb),
+                readonly=True,
+                lock=False,
+                readahead=True,
+                meminit=False,
+            )
+
         self.args = args
 
     def __getitem__(self, i):
@@ -131,8 +141,13 @@ class Dataset(BaseDataset):
             image = load_image(rgb_path, self.args, use_cv=True)
         else:
             rgb_path, vflow_path, agl_path = self.paths_list[i]
-            image = load_image(rgb_path, self.args)
-            agl = load_image(agl_path, self.args)
+            if hasattr(self, "env"):
+                with self.env.begin(write=False, buffers=True) as txn:
+                    image = pickle.loads(txn.get(rgb_path.stem.encode()))
+                    agl = pickle.loads(txn.get(rgb_path.stem.replace("RGB", "AGL").encode()))
+            else:
+                image = load_image(rgb_path, self.args)
+                agl = load_image(agl_path, self.args)
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
             if (not self.is_val) and self.args.augmentation:
