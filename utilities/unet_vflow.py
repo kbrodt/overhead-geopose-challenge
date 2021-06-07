@@ -72,7 +72,6 @@ class UnetVFLOW(nn.Module):
         decoder_output = self.decoder(*features)
 
         xydir = self.xydir_head(features[-1])
-        xydir = xydir / torch.norm(xydir, dim=-1, keepdim=True)
         height = self.height_head(decoder_output)
         mag = self.mag_head(decoder_output)
         scale = self.scale_head(mag, height)

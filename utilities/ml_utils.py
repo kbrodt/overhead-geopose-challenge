@@ -48,24 +48,24 @@ RNG = np.random.RandomState(4321)
 p = 0.5
 albu_train = A.Compose([
     A.RandomCrop(512, 512),
-    
-    # A.Flip(p=p),
-    # A.RandomRotate90(p=p),
+
+    A.CoarseDropout(max_holes=16, max_height=32, max_width=32, p=p),
     
     A.OneOf([
+        A.Blur(blur_limit=3, p=p),
         A.MotionBlur(p=p),
         A.MedianBlur(blur_limit=3, p=p),
-        A.Blur(blur_limit=3, p=p),
+        A.GlassBlur(p=1),
     ], p=p),
     A.OneOf([
         A.RandomBrightnessContrast(p=1),
         A.RandomGamma(p=1),
+        A.RandomToneCurve(p=1),
     ], p=p),
     
     A.OneOf([
         A.GaussianBlur(p=1),
         A.GaussNoise(p=1),
-        A.IAAAdditiveGaussianNoise(p=1),
     ], p=p),
 ])
 
@@ -710,7 +710,7 @@ def train(args):
     scaler = torch.cuda.amp.GradScaler()
 
     dense_loss = NoNaNMSE()
-    angle_loss = AngleLoss()  # MSELoss()
+    angle_loss = MSELoss()
     scale_loss = MSELoss()
 
     train_epoch = TrainEpoch(
