@@ -71,7 +71,6 @@ albu_train = A.Compose([
 ])
 
 
-
 class Dataset(BaseDataset):
     def __init__(
         self,
@@ -772,7 +771,7 @@ def train(args):
                 best_score = checkpoint["best_score"]
                 new_state_dict = OrderedDict()
                 for k, v in checkpoint["state_dict"].items():
-                    name = k[7:] if k.startswith('module') else k
+                    name = k  # k[7:] if k.startswith('module') else k
                     new_state_dict[name] = v
 
                 model.load_state_dict(new_state_dict)
@@ -869,7 +868,12 @@ def test(args):
     model.load_state_dict(new_state_dict)
     model.to("cuda")
     model.eval()
+
+    # if 'efficientnet' in args.backbone:
+        # model.encoder.set_swish(memory_efficient=False)
+
     with torch.no_grad():
+        # model = torch.jit.trace(model, torch.rand(2, 3, 512, 512).cuda())
 
         test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args, is_val=True)
         args.num_workers = min(max(args.num_workers, args.batch_size), 16)
@@ -908,6 +912,54 @@ def test(args):
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+            if args.tta > 7:  # rotate90
+                images_rot90 = torch.rot90(images, k=1, dims=[-2, -1])
+
+                pred_tta = model(images_rot90)
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta = torch.stack([-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1)
+                agl_pred_tta = torch.rot90(agl_pred_tta, k=-1, dims=[-2, -1])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+                # vertical flip
+                pred_tta = model(torch.flip(images_rot90, dims=[-1]))
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta[:, 0] *= -1
+                agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
+                xydir_pred_tta = torch.stack([-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1)
+                agl_pred_tta = torch.rot90(agl_pred_tta, k=-1, dims=[-2, -1])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+                # horizontal flip
+                pred_tta = model(torch.flip(images_rot90, dims=[-2]))
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta[:, 1] *= -1
+                agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
+                xydir_pred_tta = torch.stack([-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1)
+                agl_pred_tta = torch.rot90(agl_pred_tta, k=-1, dims=[-2, -1])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+                # vertical+horizontal flip
+                pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta *= -1
+                agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
+                xydir_pred_tta = torch.stack([-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1)
+                agl_pred_tta = torch.rot90(agl_pred_tta, k=-1, dims=[-2, -1])
 
                 pred[0] += xydir_pred_tta
                 pred[1] += agl_pred_tta
