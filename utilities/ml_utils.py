@@ -52,11 +52,12 @@ albu_train = A.Compose([
     A.CoarseDropout(max_holes=16, max_height=32, max_width=32, p=p),
     
     A.OneOf([
-        A.Blur(blur_limit=3, p=p),
-        A.MotionBlur(p=p),
-        A.MedianBlur(blur_limit=3, p=p),
+        A.Blur(blur_limit=3, p=1),
+        A.MotionBlur(p=1),
+        A.MedianBlur(blur_limit=3, p=1),
         A.GlassBlur(p=1),
     ], p=p),
+
     A.OneOf([
         A.RandomBrightnessContrast(p=1),
         A.RandomGamma(p=1),
