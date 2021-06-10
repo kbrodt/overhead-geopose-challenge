@@ -127,6 +127,12 @@ if __name__ == "__main__":
         default=0,
     )
     parser.add_argument(
+        "--tta",
+        type=int,
+        help="test time augmentation",
+        default=1,
+    )
+    parser.add_argument(
         "--local_rank",
         type=int,
         help="fold",

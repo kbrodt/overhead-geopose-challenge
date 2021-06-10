@@ -880,12 +880,47 @@ def test(args):
 
             images = images.to("cuda", non_blocking=True)
             pred = model(images)
+            pred = list(pred)
+
+            if args.tta > 1:  # vertical flip
+                pred_tta = model(torch.flip(images, dims=[-1]))
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta[:, 0] *= -1
+                agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+            if args.tta > 2:  # horizontal flip
+                pred_tta = model(torch.flip(images, dims=[-2]))
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta[:, 1] *= -1
+                agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+            if args.tta > 3:  # vertical+horizontal flip
+                pred_tta = model(torch.flip(images, dims=[-1, -2]))
+                xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
+                xydir_pred_tta *= -1
+                agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
+
+                pred[0] += xydir_pred_tta
+                pred[1] += agl_pred_tta
+                pred[3] += scale_pred_tta
+
+            pred[0] /= args.tta
+            pred[1] /= args.tta
+            pred[3] /= args.tta
 
             numpy_preds = []
             for i in range(len(pred)):
-                numpy_preds.append(pred[i].detach().cpu().numpy())
+                numpy_preds.append(pred[i].cpu().numpy())
 
-            xydir_pred, agl_pred, mag_pred, scale_pred = numpy_preds
+            xydir_pred, agl_pred, _, scale_pred = numpy_preds
 
             if scale_pred.ndim == 0:
                 scale_pred = np.expand_dims(scale_pred, axis=0)
