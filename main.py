@@ -148,11 +148,16 @@ if __name__ == "__main__":
     parser.add_argument("--deterministic", action="store_true", help="deterministic training")
     parser.add_argument("--resume", type=str, default="", help="path to pretrained model to resume training")
     parser.add_argument("--lmdb", type=str, default=None, help="path to lmdb")
+    parser.add_argument('--channels-last', action='store_true', help='Use channels_last memory layout')
+    parser.add_argument('--prefetch', action='store_true', help='Use prefetching')
 
     args = parser.parse_args()
     print(args)
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
+    os.environ["MKL_NUM_THREADS"] = "1"
+    os.environ["NUMEXPR_NUM_THREADS"] = "1"
+    os.environ["OMP_NUM_THREADS"] = "1"
     
     if args.train:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
