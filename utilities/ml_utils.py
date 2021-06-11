@@ -23,13 +23,11 @@ from segmentation_models_pytorch.utils.meter import AverageValueMeter
 from sklearn.model_selection import StratifiedKFold
 
 from pathlib import Path
-from PIL import Image
 
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as BaseDataset
 
 from utilities.misc_utils import (
-    UNITS_PER_METER_CONVERSION_FACTORS,
     convert_and_compress_prediction_dir,
     load_image,
     load_vflow,
@@ -46,8 +44,9 @@ from utilities.unet_vflow import UnetVFLOW
 RNG = np.random.RandomState(4321)
 
 p = 0.5
+crop_fn = A.RandomCrop(512, 512)
 albu_train = A.Compose([
-    A.RandomCrop(512, 512),
+    crop_fn,
 
     A.CoarseDropout(max_holes=16, max_height=32, max_width=32, p=p),
     
@@ -148,6 +147,12 @@ class Dataset(BaseDataset):
             else:
                 image = load_image(rgb_path, self.args)
                 agl = load_image(agl_path, self.args)
+
+            # if (not self.is_test) and (not self.is_val):
+                # data = crop_fn(image=image, mask=agl)
+                # image = data["image"]
+                # agl = data["mask"]
+
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
             if (not self.is_val) and self.args.augmentation:
@@ -199,6 +204,68 @@ class Dataset(BaseDataset):
     def __len__(self):
         return len(self.paths_list)
 
+    @staticmethod
+    def fast_collate(batch):
+        image, xydir, agl, mag, scale = zip(*batch)
+
+        image, xydir, agl, mag, scale = map(
+            lambda x: torch.tensor(x),
+            (image, xydir, agl, mag, scale)
+        )
+
+        return image, xydir, agl, mag, scale
+
+#         return torch.stack(x), torch.stack(y)
+
+#         targets = torch.tensor([b[1] for b in batch], dtype=torch.int64)
+#         assert len(targets) == batch_size
+#         tensor = torch.zeros((batch_size, *batch[0][0].shape), dtype=torch.uint8)
+#         for i in range(batch_size):
+#             tensor[i] += torch.from_numpy(batch[i][0])
+#         return tensor, targets
+
+
+class PrefetchLoader:
+    def __init__(self, loader, fp16=False):
+        self.loader = loader
+        self.fp16 = fp16
+
+    def __iter__(self):
+        stream = torch.cuda.Stream()
+        first = True
+
+        for next_image, next_xydir, next_agl, next_mag, next_scale in self.loader:
+            with torch.cuda.stream(stream):
+                next_image, next_xydir, next_agl, next_mag, next_scale = map(
+                    lambda x: x.cuda(non_blocking=True),
+                    (next_image, next_xydir, next_agl, next_mag, next_scale)
+                )
+                # if self.fp16:
+                #     next_input = next_input.half().sub_(self.mean).div_(self.std)
+                # else:
+                #     next_input = next_input.float().sub_(self.mean).div_(self.std)
+
+            if not first:
+                yield image, xydir, agl, mag, scale
+            else:
+                first = False
+
+            torch.cuda.current_stream().wait_stream(stream)
+            image, xydir, agl, mag, scale = next_image, next_xydir, next_agl, next_mag, next_scale
+
+        yield image, xydir, agl, mag, scale
+
+    def __len__(self):
+        return len(self.loader)
+
+    @property
+    def sampler(self):
+        return self.loader.sampler
+
+    @property
+    def dataset(self):
+        return self.loader.dataset
+
 
 class Epoch:
     def __init__(
@@ -212,6 +279,7 @@ class Epoch:
         device="cpu",
         verbose=True,
         local_rank=0,
+        channels_last=False,
     ):
         self.args = args
         self.model = model
@@ -222,6 +290,7 @@ class Epoch:
         self.verbose = verbose
         self.device = device
         self.local_rank = local_rank
+        self.channels_last = channels_last
 
         self.loss_names = ["combined", "agl", "mag", "angle", "scale"]
 
@@ -269,6 +338,7 @@ class Epoch:
                 desc=self.stage_name,
                 file=sys.stdout,
                 disable=not (self.verbose),
+                mininterval=2,
             )
 
         for itr_data in dataloader:
@@ -396,6 +466,7 @@ class TrainEpoch(Epoch):
         device="cpu",
         verbose=True,
         local_rank=0,
+        channels_last=False,
     ):
         super().__init__(
             model=model,
@@ -407,6 +478,7 @@ class TrainEpoch(Epoch):
             device=device,
             verbose=verbose,
             local_rank=local_rank,
+            channels_last=False,
         )
         self.optimizer = optimizer
         self.scaler = scaler
@@ -415,6 +487,9 @@ class TrainEpoch(Epoch):
         self.model.train()
 
     def batch_update(self, x, y):
+        # if self.channels_last:
+            # x = x.contiguous(memory_format=torch.channels_last)
+
         self.optimizer.zero_grad()
         
         if self.scaler is not None:
@@ -474,7 +549,7 @@ class TrainEpoch(Epoch):
 
 
 class ValidEpoch(Epoch):
-    def __init__(self, model, args, device="cpu", verbose=True, local_rank=0):
+    def __init__(self, model, args, device="cpu", verbose=True, local_rank=0, channels_last=False):
         super().__init__(
             model=model,
             args=args,
@@ -482,12 +557,16 @@ class ValidEpoch(Epoch):
             device=device,
             verbose=verbose,
             local_rank=local_rank,
+            channels_last=channels_last,
         )
 
     def on_epoch_start(self):
         self.model.eval()
 
     def batch_update(self, x):
+        # if self.channels_last:
+            # x = x.contiguous(memory_format=torch.channels_last)
+
         with torch.no_grad():
             xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x)
 
@@ -646,6 +725,22 @@ def all_gather(data):
     return data_list
 
 
+def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
+    decay, no_decay = [], []
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue  # frozen weights
+        if len(param.shape) == 1 or name.endswith(".bias") or name in skip_list:
+            no_decay.append(param)
+        else:
+            decay.append(param)
+
+    return [
+        {'params': no_decay, 'weight_decay': 0.},
+        {'params': decay, 'weight_decay': weight_decay},
+    ]
+
+
 def train(args):
 
     if args.distributed:
@@ -654,13 +749,58 @@ def train(args):
     torch.backends.cudnn.benchmark = True
 
     model = build_model(args)
+    model = model.cuda()
+    if args.resume:
+        path_to_resume = Path(args.resume).expanduser()
+        if path_to_resume.is_file():
+            print(f"=> loading resume checkpoint '{path_to_resume}'")
+            checkpoint = torch.load(
+                path_to_resume,
+                map_location=lambda storage, loc: storage.cuda(args.gpu),  # change here!
+            )
+            new_state_dict = OrderedDict()
+            for k, v in checkpoint["state_dict"].items():
+                name = k[7:] if k.startswith('module') else k
+                new_state_dict[name] = v
+
+            model.load_state_dict(new_state_dict)
+            print(
+                f"=> resume from checkpoint '{path_to_resume}' (epoch {checkpoint['epoch']})"
+            )
+        else:
+            print(f"=> no checkpoint found at '{path_to_resume}'")
+
+    if args.channels_last:
+        model = model.to(memory_format=torch.channels_last)
+
+    # weight_decay = args.weight_decay
+    # if weight_decay > 0:  # and filter_bias_and_bn:
+        # skip = {}
+        # if hasattr(model, 'no_weight_decay'):
+            # skip = model.no_weight_decay()
+
+        # parameters = add_weight_decay(model, weight_decay, skip)
+        # weight_decay = 0.
+    # else:
+        # parameters = model.parameters()
+
+    parameters = model.parameters()
+    optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
+        parameters,
+        adam_w_mode=True,
+        lr=args.learning_rate,
+        weight_decay=args.weight_decay,
+    )
+
+    if args.resume:
+        optimizer.load_state_dict(checkpoint["opt_state_dict"])
+
     if args.distributed:
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
         # computation in the backward pass.
         # model = DDP(model)
         # delay_allreduce delays all communication to the end of the backward pass.
         # model = apex.parallel.convert_syncbn_model(model)
-        model = model.cuda()
         model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
     
     df = pd.read_csv(args.train_path_df)
@@ -681,31 +821,30 @@ def train(args):
         batch_size=args.batch_size,
         shuffle=train_sampler is None,
         sampler=train_sampler,
+        collate_fn=None,  # train_dataset.fast_collate,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
+        persistent_workers=True,
     )
     val_loader = DataLoader(
         val_dataset,
         batch_size=max(args.batch_size // 4, 1),
         shuffle=False,
         sampler=val_sampler,
+        collate_fn=None,  # val_dataset.fast_collate,
         num_workers=args.num_workers,
-        pin_memory=True,
+        pin_memory=False,
+        persistent_workers=True,
     )
-
-    optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
-        [
-            dict(params=model.parameters(), lr=args.learning_rate),
-        ],
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
-    )
+    if args.prefetch:
+        train_loader = PrefetchLoader(train_loader)
+        val_loader = PrefetchLoader(val_loader)
     
     scheduler = None
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
     )
-    
+
     scaler = None
     scaler = torch.cuda.amp.GradScaler()
 
@@ -723,6 +862,7 @@ def train(args):
         scaler=scaler,
         device="cuda",
         local_rank=args.local_rank,
+        channels_last=args.channels_last,
     )
 
     val_epoch = ValidEpoch(
@@ -730,6 +870,7 @@ def train(args):
         args=args,
         device="cuda",
         local_rank=args.local_rank,
+        channels_last=args.channels_last,
     )
     
     best_score = 0
@@ -756,40 +897,39 @@ def train(args):
     # Optionally resume from a checkpoint
     if args.resume:
         # Use a local scope to avoid dangling references
-        def _resume():
-            nonlocal start_epoch, best_score
-            path_to_resume = Path(args.resume).expanduser()
-            if path_to_resume.is_file():
-                print(f"=> loading resume checkpoint '{path_to_resume}'")
-                checkpoint = torch.load(
-                    path_to_resume,
-                    map_location=lambda storage, loc: storage.cuda(args.gpu),  # change here!
-                )
-                start_epoch = checkpoint["epoch"] + 1
+#         def _resume():
+#             nonlocal start_epoch, best_score
+#             path_to_resume = Path(args.resume).expanduser()
+#             if path_to_resume.is_file():
+#                 print(f"=> loading resume checkpoint '{path_to_resume}'")
+#                 checkpoint = torch.load(
+#                     path_to_resume,
+#                     map_location=lambda storage, loc: storage.cuda(args.gpu),  # change here!
+#                 )
+        start_epoch = checkpoint["epoch"] + 1
                 # history = checkpoint["history"]
                 # best_score = max(history["score"]["dev"])
-                best_score = checkpoint["best_score"]
-                new_state_dict = OrderedDict()
-                for k, v in checkpoint["state_dict"].items():
-                    name = k  # k[7:] if k.startswith('module') else k
-                    new_state_dict[name] = v
+        best_score = checkpoint["best_score"]
+#                 new_state_dict = OrderedDict()
+#                 for k, v in checkpoint["state_dict"].items():
+#                     name = k[7:] if k.startswith('module') else k
+#                     new_state_dict[name] = v
 
-                model.load_state_dict(new_state_dict)
-                optimizer.load_state_dict(checkpoint["opt_state_dict"])
-                if checkpoint["sched_state_dict"] is not None:
-                    scheduler.load_state_dict(checkpoint["sched_state_dict"])
+#                 model.load_state_dict(new_state_dict)
+#         optimizer.load_state_dict(checkpoint["opt_state_dict"])
+        if checkpoint["sched_state_dict"] is not None:
+            scheduler.load_state_dict(checkpoint["sched_state_dict"])
 
-                if checkpoint["scaler"] is not None:
-                    scaler.load_state_dict(checkpoint["scaler"])
+        if checkpoint["scaler"] is not None:
+            scaler.load_state_dict(checkpoint["scaler"])
 
-                print(
-                    f"=> resume from checkpoint '{path_to_resume}' (epoch {checkpoint['epoch']})"
-                )
-            else:
-                print(f"=> no checkpoint found at '{path_to_resume}'")
+#                 print(
+#                     f"=> resume from checkpoint '{path_to_resume}' (epoch {checkpoint['epoch']})"
+#                 )
+#             else:
+#                 print(f"=> no checkpoint found at '{path_to_resume}'")
 
-        _resume()
-
+#         _resume()
 
     for i in range(start_epoch, args.num_epochs):
         if args.distributed:
@@ -881,7 +1021,7 @@ def test(args):
             test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
         )
         predictions_dir = Path(args.predictions_dir)
-        for images, rgb_paths in tqdm(test_loader):
+        for images, rgb_paths in tqdm(test_loader, mininterval=2):
 
             images = images.to("cuda", non_blocking=True)
             pred = model(images)
