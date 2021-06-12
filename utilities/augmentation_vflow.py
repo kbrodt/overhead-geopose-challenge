@@ -17,25 +17,27 @@ def augment_vflow(
     angle,
     scale,
     agl=None,
+    rotate90_prob=0.5,
     rotate_prob=0.3,
-    flip_prob=0.3,
-    scale_prob=0.3,
-    agl_prob=0.3,
+    flip_prob=0.5,
+    scale_prob=0.5,
+    agl_prob=0.5,
     rng=RNG,
+    # max_agl=None,
+    max_building_agl=200.0,
+    max_factor=2.0,
 ):
     # increase heights
-    if np.isnan(mag).any() or np.isnan(agl).any():
-        agl_prob = 0
-    if rng.uniform(0, 1) < agl_prob:
-        max_agl = np.nanmax(agl)
-        max_building_agl = 200.0
-        max_factor = 2.0
-        max_scale_agl = min(max_factor, (max_building_agl / max_agl))
-        scale_height = rng.uniform(1.0, max(1.0, max_scale_agl))
-        image, mag, agl = warp_agl(image, mag, angle, agl, scale_height, max_factor)
-    # rotate
-    if rng.uniform(0, 1) < rotate_prob:
-        rotate_angle = rng.randint(0, 359)
+    is_nan = np.isnan(mag).any() or np.isnan(agl).any()
+    if not is_nan and rng.uniform(0, 1) < agl_prob:
+        max_agl = np.max(agl)  # if max_agl is None else max_agl
+        if max_agl > 0:
+            max_scale_agl = min(max_factor, (max_building_agl / max_agl))
+            scale_height = rng.uniform(1.0, max(1.0, max_scale_agl))
+            image, mag, agl = warp_agl(image, mag, angle, agl, scale_height, max_factor)
+    # rotate90
+    if rng.uniform(0, 1) < rotate90_prob:
+        rotate_angle = rng.choice([90, 180, 270])
         xdir, ydir = rotate_xydir(xdir, ydir, rotate_angle)
         image, mag, agl = rotate_image(image, mag, agl, rotate_angle)
     # x flip
@@ -46,6 +48,11 @@ def augment_vflow(
     if rng.uniform(0, 1) < flip_prob:
         image, mag, agl = flip(image, mag, agl, dim="y")
         ydir *= -1
+    # rotate
+    if rng.uniform(0, 1) < rotate_prob:
+        rotate_angle = rng.randint(0, 359)
+        xdir, ydir = rotate_xydir(xdir, ydir, rotate_angle)
+        image, mag, agl = rotate_image(image, mag, agl, rotate_angle)
     # rescale
     if rng.uniform(0, 1) < scale_prob:
         factor = 1.0 - 0.3 * rng.random()
@@ -96,7 +103,7 @@ def rotate_image(image, mag, agl, angle, image_only=False):
     image_rotated = (
         None
         if image is None
-        else cv2.warpAffine(image, rot_mat, (wnew, hnew), flags=cv2.INTER_LINEAR)
+        else cv2.warpAffine(image, rot_mat, (wnew, hnew), flags=cv2.INTER_LINEAR)  # , borderMode=cv2.BORDER_REFLECT_101)
     )
     if image_rotated is not None:
         r1, c1, r2, c2 = get_crop_region(image_rotated, image)
@@ -106,9 +113,9 @@ def rotate_image(image, mag, agl, angle, image_only=False):
     agl_rotated = (
         None
         if agl is None
-        else cv2.warpAffine(agl, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST)
+        else cv2.warpAffine(agl, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST)  # , borderMode=cv2.BORDER_REFLECT_101)
     )
-    mag_rotated = cv2.warpAffine(mag, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST)
+    mag_rotated = cv2.warpAffine(mag, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST)  # , borderMode=cv2.BORDER_REFLECT_101)
     if image_rotated is None:
         r1, c1, r2, c2 = get_crop_region(mag_rotated, mag)
     mag_rotated = mag_rotated[r1:r2, c1:c2]
