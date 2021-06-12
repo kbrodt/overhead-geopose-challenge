@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import sys
+import itertools
 from collections import OrderedDict
 
 from glob import glob
@@ -8,6 +9,8 @@ from pathlib import Path
 
 import segmentation_models_pytorch as smp
 import torch
+import torchvision
+from torch.utils.tensorboard import SummaryWriter
 import lmdb
 
 from tqdm import tqdm
@@ -44,12 +47,11 @@ from utilities.unet_vflow import UnetVFLOW
 RNG = np.random.RandomState(4321)
 
 p = 0.5
-crop_fn = A.RandomCrop(512, 512)
+crop_fn = A.RandomCrop(1024, 1024)
 albu_train = A.Compose([
-    crop_fn,
+    A.RandomCrop(512, 512),
+    A.CoarseDropout(max_holes=32, max_height=32, max_width=32, p=p),
 
-    A.CoarseDropout(max_holes=16, max_height=32, max_width=32, p=p),
-    
     A.OneOf([
         A.Blur(blur_limit=3, p=1),
         A.MotionBlur(p=1),
@@ -62,10 +64,11 @@ albu_train = A.Compose([
         A.RandomGamma(p=1),
         A.RandomToneCurve(p=1),
     ], p=p),
-    
+
     A.OneOf([
         A.GaussianBlur(p=1),
         A.GaussNoise(p=1),
+        A.FancyPCA(p=0.2),
     ], p=p),
 ])
 
@@ -148,10 +151,11 @@ class Dataset(BaseDataset):
                 image = load_image(rgb_path, self.args)
                 agl = load_image(agl_path, self.args)
 
-            # if (not self.is_test) and (not self.is_val):
-                # data = crop_fn(image=image, mask=agl)
-                # image = data["image"]
-                # agl = data["mask"]
+            # max_agl = np.nanmax(agl)
+            if (not self.is_test) and (not self.is_val):
+                data = crop_fn(image=image, mask=agl)
+                image = data["image"]
+                agl = data["mask"]
 
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
@@ -164,10 +168,12 @@ class Dataset(BaseDataset):
                     vflow_data["angle"],
                     vflow_data["scale"],
                     agl=agl,
-                    rotate_prob=0.5,
+                    rotate90_prob=0.5,
+                    rotate_prob=0.3,
                     flip_prob=0.5,
                     scale_prob=0.5,
                     agl_prob=0.5,
+                    # max_agl=max_agl,
                 )
             xdir = np.float32(xdir)
             ydir = np.float32(ydir)
@@ -226,9 +232,8 @@ class Dataset(BaseDataset):
 
 
 class PrefetchLoader:
-    def __init__(self, loader, fp16=False):
+    def __init__(self, loader):
         self.loader = loader
-        self.fp16 = fp16
 
     def __iter__(self):
         stream = torch.cuda.Stream()
@@ -240,10 +245,6 @@ class PrefetchLoader:
                     lambda x: x.cuda(non_blocking=True),
                     (next_image, next_xydir, next_agl, next_mag, next_scale)
                 )
-                # if self.fp16:
-                #     next_input = next_input.half().sub_(self.mean).div_(self.std)
-                # else:
-                #     next_input = next_input.float().sub_(self.mean).div_(self.std)
 
             if not first:
                 yield image, xydir, agl, mag, scale
@@ -314,7 +315,7 @@ class Epoch:
     def on_epoch_start(self):
         pass
 
-    def run(self, dataloader):
+    def run(self, dataloader, desc=""):
 
         self.on_epoch_start()
 
@@ -335,10 +336,11 @@ class Epoch:
         if self.local_rank == 0:
             iterator = tqdm(
                 total=len(dataloader),
-                desc=self.stage_name,
+                desc=f"{self.stage_name} {desc}",
                 file=sys.stdout,
                 disable=not (self.verbose),
                 mininterval=2,
+                leave=False,
             )
 
         for itr_data in dataloader:
@@ -375,25 +377,24 @@ class Epoch:
 
                 logs.update(loss_logs)
             else:
-
                 xydir_pred, agl_pred, mag_pred, scale_pred = self.batch_update(
                     image
                 )
 
-                xydir = xydir.cpu().detach().numpy()
-                agl = agl.cpu().detach().numpy()
-                mag = mag.cpu().detach().numpy()
-                scale = scale.cpu().detach().numpy()
+                xydir = xydir.cpu().numpy()
+                agl = agl.cpu().numpy()
+                mag = mag.cpu().numpy()
+                scale = scale.cpu().numpy()
 
-                xydir_pred = xydir_pred.cpu().detach().numpy()
-                agl_pred = agl_pred.cpu().detach().numpy()
-                mag_pred = mag_pred.cpu().detach().numpy()
-                scale_pred = scale_pred.cpu().detach().numpy()
+                xydir_pred = xydir_pred.cpu().numpy()
+                agl_pred = agl_pred.cpu().numpy()
+                mag_pred = mag_pred.cpu().numpy()
+                scale_pred = scale_pred.cpu().numpy()
 
                 for batch_ind in range(agl.shape[0]):
 
                     count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
-                        agl[batch_ind, :, :], agl_pred[batch_ind, :, :]
+                        agl[batch_ind], agl_pred[batch_ind]
                     )
                     agl_count += count
                     agl_error_sum += error_sum
@@ -401,8 +402,16 @@ class Epoch:
                     agl_sum += data_sum
                     agl_gt_sq_sum += gt_sq_sum
 
+                    vflow = np.zeros((agl[batch_ind].squeeze().shape[0], agl[batch_ind].squeeze().shape[1], 2))
+                    vflow[..., 0] = mag[batch_ind].squeeze() * xydir[batch_ind, 0]
+                    vflow[..., 1] = mag[batch_ind].squeeze() * xydir[batch_ind, 1]
+
+                    vflow_pred = np.zeros_like(vflow)
+                    vflow_pred[..., 0] = mag_pred[batch_ind].squeeze() * xydir_pred[batch_ind, 0]
+                    vflow_pred[..., 1] = mag_pred[batch_ind].squeeze() * xydir_pred[batch_ind, 1]
+
                     count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
-                        mag[batch_ind, :, :], mag_pred[batch_ind, :, :]
+                        vflow, vflow_pred,
                     )
                     mag_count += count
                     mag_error_sum += error_sum
@@ -428,7 +437,6 @@ class Epoch:
                 iterator.update()
 
         if self.stage_name == "valid":
-            
             logs.update(dict(
                 agl_error_sum=agl_error_sum,
                 agl_gt_sq_sum=agl_gt_sq_sum,
@@ -478,7 +486,7 @@ class TrainEpoch(Epoch):
             device=device,
             verbose=verbose,
             local_rank=local_rank,
-            channels_last=False,
+            channels_last=channels_last,
         )
         self.optimizer = optimizer
         self.scaler = scaler
@@ -539,9 +547,12 @@ class TrainEpoch(Epoch):
 
         if self.scaler is None:
             loss_combined.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 2.0)
             self.optimizer.step()
         else:
             self.scaler.scale(loss_combined).backward()
+            self.scaler.unscale_(self.optimizer)
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 2.0)
             self.scaler.step(self.optimizer)
             self.scaler.update()
 
@@ -663,68 +674,6 @@ def init_dist(args):
     assert torch.backends.cudnn.enabled, "Amp requires cudnn backend to be enabled."
 
 
-def reduce_tensor(tensor):
-    rt = tensor.clone()
-    torch.distributed.all_reduce(rt, op=torch.distributed.ReduceOp.SUM)
-    rt /= args.world_size
-
-    return rt
-
-
-# https://discuss.pytorch.org/t/how-to-concatenate-different-size-tensors-from-distributed-processes/44819
-# https://github.com/facebookresearch/maskrcnn-benchmark/blob/master/maskrcnn_benchmark/utils/comm.py
-
-def get_world_size():
-    if not torch.distributed.is_available():
-        return 1
-    if not torch.distributed.is_initialized():
-        return 1
-    return torch.distributed.get_world_size()
-
-
-def all_gather(data):
-    """
-    Run all_gather on arbitrary picklable data (not necessarily tensors)
-    Args:
-        data: any picklable object
-    Returns:
-        list[data]: list of data gathered from each rank
-    """
-    world_size = get_world_size()
-    if world_size == 1:
-        return [data]
-
-    # serialized to a Tensor
-    buffer = pickle.dumps(data)
-    storage = torch.ByteStorage.from_buffer(buffer)
-    tensor = torch.ByteTensor(storage).to("cuda")
-
-    # obtain Tensor size of each rank
-    local_size = torch.LongTensor([tensor.numel()]).to("cuda")
-    size_list = [torch.LongTensor([0]).to("cuda") for _ in range(world_size)]
-    torch.distributed.all_gather(size_list, local_size)
-    size_list = [int(size.item()) for size in size_list]
-    max_size = max(size_list)
-
-    # receiving Tensor from all ranks
-    # we pad the tensor because torch all_gather does not support
-    # gathering tensors of different shapes
-    tensor_list = []
-    for _ in size_list:
-        tensor_list.append(torch.ByteTensor(size=(max_size,)).to("cuda"))
-    if local_size != max_size:
-        padding = torch.ByteTensor(size=(max_size - local_size,)).to("cuda")
-        tensor = torch.cat((tensor, padding), dim=0)
-    torch.distributed.all_gather(tensor_list, tensor)
-
-    data_list = []
-    for size, tensor in zip(size_list, tensor_list):
-        buffer = tensor.cpu().numpy().tobytes()[:size]
-        data_list.append(pickle.loads(buffer))
-
-    return data_list
-
-
 def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
     decay, no_decay = [], []
     for name, param in model.named_parameters():
@@ -742,11 +691,14 @@ def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
 
 
 def train(args):
-
     if args.distributed:
         init_dist(args)
 
     torch.backends.cudnn.benchmark = True
+
+    summary_writer = None
+    if args.local_rank == 0:
+        summary_writer = SummaryWriter(Path(args.checkpoint_dir) / "logs")  # /exp_name
 
     model = build_model(args)
     model = model.cuda()
@@ -773,16 +725,16 @@ def train(args):
     if args.channels_last:
         model = model.to(memory_format=torch.channels_last)
 
-    # weight_decay = args.weight_decay
-    # if weight_decay > 0:  # and filter_bias_and_bn:
-        # skip = {}
-        # if hasattr(model, 'no_weight_decay'):
-            # skip = model.no_weight_decay()
+    weight_decay = args.weight_decay
+    if weight_decay > 0:  # and filter_bias_and_bn:
+        skip = {}
+        if hasattr(model, 'no_weight_decay'):
+            skip = model.no_weight_decay()
 
-        # parameters = add_weight_decay(model, weight_decay, skip)
-        # weight_decay = 0.
-    # else:
-        # parameters = model.parameters()
+        parameters = add_weight_decay(model, weight_decay, skip)
+        weight_decay = 0.
+    else:
+        parameters = model.parameters()
 
     parameters = model.parameters()
     optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
@@ -806,7 +758,9 @@ def train(args):
     df = pd.read_csv(args.train_path_df)
     train_df, dev_df = train_dev_split(df, args)
 
+    CITIES = ["ARG", "ATL", "JAX", "OMA"]
     train_dataset = Dataset(train_df, args=args, is_val=False)
+    dev_df = dev_df[dev_df.area == CITIES[args.local_rank]].reset_index(drop=True)
     val_dataset = Dataset(dev_df, args=args, is_val=True)
 
     train_sampler = None
@@ -825,6 +779,7 @@ def train(args):
         num_workers=args.num_workers,
         pin_memory=False,
         persistent_workers=True,
+        drop_last=True,
     )
     val_loader = DataLoader(
         val_dataset,
@@ -841,8 +796,11 @@ def train(args):
         val_loader = PrefetchLoader(val_loader)
     
     scheduler = None
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            # optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
+    # )
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=5 * args.T_max, T_mult=1, eta_min=max(args.learning_rate * 1e-2, 1e-6)  # T_mult=sqrt(2)
     )
 
     scaler = None
@@ -879,7 +837,6 @@ def train(args):
             {
                 "epoch": i,
                 "best_score": best_score,
-                # "history": history,
                 "state_dict": model.state_dict(),
                 "opt_state_dict": optimizer.state_dict(),
                 "sched_state_dict": scheduler.state_dict()
@@ -894,56 +851,44 @@ def train(args):
         )
 
     start_epoch = 0
-    # Optionally resume from a checkpoint
-    if args.resume:
-        # Use a local scope to avoid dangling references
-#         def _resume():
-#             nonlocal start_epoch, best_score
-#             path_to_resume = Path(args.resume).expanduser()
-#             if path_to_resume.is_file():
-#                 print(f"=> loading resume checkpoint '{path_to_resume}'")
-#                 checkpoint = torch.load(
-#                     path_to_resume,
-#                     map_location=lambda storage, loc: storage.cuda(args.gpu),  # change here!
-#                 )
+    if not args.from_zero and args.resume:
         start_epoch = checkpoint["epoch"] + 1
-                # history = checkpoint["history"]
-                # best_score = max(history["score"]["dev"])
         best_score = checkpoint["best_score"]
-#                 new_state_dict = OrderedDict()
-#                 for k, v in checkpoint["state_dict"].items():
-#                     name = k[7:] if k.startswith('module') else k
-#                     new_state_dict[name] = v
-
-#                 model.load_state_dict(new_state_dict)
-#         optimizer.load_state_dict(checkpoint["opt_state_dict"])
         if checkpoint["sched_state_dict"] is not None:
             scheduler.load_state_dict(checkpoint["sched_state_dict"])
 
         if checkpoint["scaler"] is not None:
             scaler.load_state_dict(checkpoint["scaler"])
 
-#                 print(
-#                     f"=> resume from checkpoint '{path_to_resume}' (epoch {checkpoint['epoch']})"
-#                 )
-#             else:
-#                 print(f"=> no checkpoint found at '{path_to_resume}'")
-
-#         _resume()
-
     for i in range(start_epoch, args.num_epochs):
         if args.distributed:
             train_sampler.set_epoch(i)
 
-        if args.local_rank == 0:
-            print("\nEpoch: {}".format(i))
-
-        train_logs = train_epoch.run(train_loader)
+        desc = f"{i}/{args.num_epochs}"
+        train_logs = train_epoch.run(train_loader, desc=desc)
+        # train_logs_out = [None for _ in range(torch.distributed.get_world_size())]
+        # torch.distributed.all_gather_object(train_logs_out, train_logs)
+        # train_lgs = {}
+        # for name in list(train_logs):
+            # train_lgs[name] = sum(x[name] for x in train_logs_out) / len(train_logs_out)
+        # train_logs = train_lgs
+        for name in list(train_logs):
+            train_logs_out = [None for _ in range(torch.distributed.get_world_size())]
+            torch.distributed.all_gather_object(train_logs_out, train_logs[name])
+            train_logs[name] = sum(train_logs_out) / len(train_logs_out)
 
         if args.val_period > 0 and ((i + 1) % args.val_period) == 0:
-            valid_logs = val_epoch.run(val_loader)
+            valid_logs = val_epoch.run(val_loader, desc=desc)
+            # valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
+            # torch.distributed.all_gather_object(valid_logs_out, valid_logs)
+            # valid_lgs = {}
+            # for name in list(valid_logs):
+                # valid_lgs[name] = list(itertools.chain(*[x[name] for x in valid_logs_out]))
+            # valid_logs = valid_lgs
             for name in list(valid_logs):
-                valid_logs[name] = all_gather(valid_logs[name])
+                valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
+                torch.distributed.all_gather_object(valid_logs_out, valid_logs[name])
+                valid_logs[name] = valid_logs_out
 
         if args.local_rank == 0 and ((i + 1) % args.save_period) == 0:
             saver(
@@ -953,37 +898,68 @@ def train(args):
         if scheduler is not None:
             scheduler.step()
 
-        # save best epoch
         if args.local_rank == 0 and args.val_period > 0 and args.save_best:
-            agl_error_sum = sum(valid_logs["agl_error_sum"])
-            agl_gt_sq_sum = sum(valid_logs["agl_gt_sq_sum"])
-            agl_sum = sum(valid_logs["agl_sum"])
-            agl_count = sum(valid_logs["agl_count"])
-            r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
+            r2_agl_per_city = {}
+            r2_mag_per_city = {}
+            score_per_city = {}
+            for city_index, city in enumerate(CITIES):
+                agl_error_sum = valid_logs["agl_error_sum"][city_index]
+                agl_gt_sq_sum = valid_logs["agl_gt_sq_sum"][city_index]
+                agl_sum = valid_logs["agl_sum"][city_index]
+                agl_count = valid_logs["agl_count"][city_index]
+                r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
 
-            mag_error_sum = sum(valid_logs["mag_error_sum"])
-            mag_gt_sq_sum = sum(valid_logs["mag_gt_sq_sum"])
-            mag_sum = sum(valid_logs["mag_sum"])
-            mag_count = sum(valid_logs["mag_count"])
-            r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
+                r2_agl_per_city[city] = r2_agl
 
-            angle_rms = get_rms(valid_logs["angle_errors"])
-            scale_rms = get_rms(valid_logs["scale_errors"])
-            agl_rms = get_rms(valid_logs["agl_rms"])
-            mag_rms = get_rms(valid_logs["mag_rms"])
+                mag_error_sum = valid_logs["mag_error_sum"][city_index]
+                mag_gt_sq_sum = valid_logs["mag_gt_sq_sum"][city_index]
+                mag_sum = valid_logs["mag_sum"][city_index]
+                mag_count = valid_logs["mag_count"][city_index]
+                r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
 
-            print(
-                "VAL Angle RMS: %.2f; AGL RMS: %.2f, R^2: %.4f; MAG RMS: %.2f, R^2: %.4f; Scale RMS: %.4f"
-                % (angle_rms, agl_rms, r2_agl, mag_rms, r2_mag, scale_rms)
-            )
+                r2_mag_per_city[city] = r2_mag
 
-            score = r2_agl
+                score_per_city[city] = (r2_agl + r2_mag) / 2
+
+            # agl_error_sum = sum(valid_logs["agl_error_sum"])
+            # agl_gt_sq_sum = sum(valid_logs["agl_gt_sq_sum"])
+            # agl_sum = sum(valid_logs["agl_sum"])
+            # agl_count = sum(valid_logs["agl_count"])
+            # r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
+
+            # mag_error_sum = sum(valid_logs["mag_error_sum"])
+            # mag_gt_sq_sum = sum(valid_logs["mag_gt_sq_sum"])
+            # mag_sum = sum(valid_logs["mag_sum"])
+            # mag_count = sum(valid_logs["mag_count"])
+            # r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
+
+            # angle_rms = get_rms(valid_logs["angle_errors"])
+            # scale_rms = get_rms(valid_logs["scale_errors"])
+            # agl_rms = get_rms(valid_logs["agl_rms"])
+            # mag_rms = get_rms(valid_logs["mag_rms"])
+
+            score = sum(score_per_city.values()) / len(score_per_city)
+
+            if i > 0:
+                for idx, param_group in enumerate(optimizer.param_groups):
+                    lr = param_group['lr']
+                    summary_writer.add_scalar('group{}/lr'.format(idx), float(lr), global_step=i)
+
+                summary_writer.add_scalars('train/mse', train_logs, global_step=i)
+
+                summary_writer.add_scalars("val/r2_agl", r2_agl_per_city, global_step=i)
+                summary_writer.add_scalars("val/r2_mag", r2_mag_per_city, global_step=i)
+                summary_writer.add_scalars("val/scores", score_per_city, global_step=i)
+                summary_writer.add_scalar("val/score", score, global_step=i)
 
             if score > best_score:
                 best_score = score
                 saver(
                     os.path.join(args.checkpoint_dir, "./model_best.pth"),
                 )
+
+    if args.local_rank == 0:
+        summary_writer.close()
 
 
 def test(args):
