@@ -150,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--lmdb", type=str, default=None, help="path to lmdb")
     parser.add_argument('--channels-last', action='store_true', help='Use channels_last memory layout')
     parser.add_argument('--prefetch', action='store_true', help='Use prefetching')
+    parser.add_argument('--from-zero', action='store_true', help='Do not load optimizaer and scheduler state dicts')
 
     args = parser.parse_args()
     print(args)
