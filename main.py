@@ -70,6 +70,7 @@ if __name__ == "__main__":
         default="valid",
     )
     parser.add_argument("--backbone", type=str, default="resnet34")
+    parser.add_argument("--encoder-weights", type=str, default="imagenet")
     parser.add_argument("--learning-rate", type=float, default=0.0001)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
     parser.add_argument("--T-max", type=int, default=5)

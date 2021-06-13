@@ -9,6 +9,7 @@ from pathlib import Path
 
 import segmentation_models_pytorch as smp
 import torch
+import torch.distributed
 import torchvision
 from torch.utils.tensorboard import SummaryWriter
 import lmdb
@@ -53,23 +54,30 @@ albu_train = A.Compose([
     A.CoarseDropout(max_holes=32, max_height=32, max_width=32, p=p),
 
     A.OneOf([
-        A.Blur(blur_limit=3, p=1),
-        A.MotionBlur(p=1),
-        A.MedianBlur(blur_limit=3, p=1),
+        A.Blur(p=1),
         A.GlassBlur(p=1),
+        A.GaussianBlur(p=1),
+        A.MedianBlur(p=1),
+        A.MotionBlur(p=1),
     ], p=p),
 
+    A.RandomBrightnessContrast(p=p),
+
     A.OneOf([
-        A.RandomBrightnessContrast(p=1),
         A.RandomGamma(p=1),
+        A.ColorJitter(p=1),
         A.RandomToneCurve(p=1),
     ], p=p),
 
     A.OneOf([
-        A.GaussianBlur(p=1),
         A.GaussNoise(p=1),
-        A.FancyPCA(p=0.2),
+        A.MultiplicativeNoise(p=1),
     ], p=p),
+
+    A.FancyPCA(p=0.2),
+    A.RandomFog(p=0.2),
+    A.RandomShadow(p=0.2),
+    A.RandomSunFlare(src_radius=150, p=0.2),
 ])
 
 
@@ -122,7 +130,7 @@ class Dataset(BaseDataset):
             if args.sample_size is not None:
                 self.paths_list = self.paths_list[: args.sample_size]
         self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
-            args.backbone, "imagenet"
+            args.backbone, args.encoder_weights  # "imagenet"
         )
 
         if args.lmdb is not None:
@@ -328,9 +336,11 @@ class Epoch:
         if self.stage_name == "valid":
             agl_count, agl_error_sum, agl_gt_sq_sum, agl_sum = 0, 0, 0, 0
             mag_count, mag_error_sum, mag_gt_sq_sum, mag_sum = 0, 0, 0, 0
+            vflow_count, vflow_error_sum, vflow_gt_sq_sum, vflow_sum = 0, 0, 0, 0
             angle_errors = []
             agl_rms = []
             mag_rms = []
+            vflow_rms = []
             scale_errors = []
 
         if self.local_rank == 0:
@@ -392,7 +402,6 @@ class Epoch:
                 scale_pred = scale_pred.cpu().numpy()
 
                 for batch_ind in range(agl.shape[0]):
-
                     count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
                         agl[batch_ind], agl_pred[batch_ind]
                     )
@@ -401,6 +410,15 @@ class Epoch:
                     agl_rms.append(rms)
                     agl_sum += data_sum
                     agl_gt_sq_sum += gt_sq_sum
+
+                    count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
+                        mag[batch_ind], mag_pred[batch_ind]
+                    )
+                    mag_count += count
+                    mag_error_sum += error_sum
+                    mag_rms.append(rms)
+                    mag_sum += data_sum
+                    mag_gt_sq_sum += gt_sq_sum
 
                     vflow = np.zeros((agl[batch_ind].squeeze().shape[0], agl[batch_ind].squeeze().shape[1], 2))
                     vflow[..., 0] = mag[batch_ind].squeeze() * xydir[batch_ind, 0]
@@ -413,11 +431,11 @@ class Epoch:
                     count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
                         vflow, vflow_pred,
                     )
-                    mag_count += count
-                    mag_error_sum += error_sum
-                    mag_rms.append(rms)
-                    mag_sum += data_sum
-                    mag_gt_sq_sum += gt_sq_sum
+                    vflow_count += count
+                    vflow_error_sum += error_sum
+                    vflow_rms.append(rms)
+                    vflow_sum += data_sum
+                    vflow_gt_sq_sum += gt_sq_sum
 
                     dir_pred = xydir_pred[batch_ind, :]
                     dir_gt = xydir[batch_ind, :]
@@ -448,11 +466,17 @@ class Epoch:
                 mag_sum=mag_sum,
                 mag_count=mag_count,
 
+                vflow_error_sum=vflow_error_sum,
+                vflow_gt_sq_sum=vflow_gt_sq_sum,
+                vflow_sum=vflow_sum,
+                vflow_count=vflow_count,
+
                 angle_errors=angle_errors,
                 scale_errors=scale_errors,
 
                 agl_rms=agl_rms,
                 mag_rms=mag_rms,
+                vflow_rms=vflow_rms,
             ))
 
         if self.local_rank == 0:
@@ -759,6 +783,7 @@ def train(args):
     train_df, dev_df = train_dev_split(df, args)
 
     CITIES = ["ARG", "ATL", "JAX", "OMA"]
+    assert len(CITIES) == torch.distributed.get_world_size()
     train_dataset = Dataset(train_df, args=args, is_val=False)
     dev_df = dev_df[dev_df.area == CITIES[args.local_rank]].reset_index(drop=True)
     val_dataset = Dataset(dev_df, args=args, is_val=True)
@@ -769,7 +794,7 @@ def train(args):
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
         val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
 
-    args.num_workers = min(max(args.num_workers, args.batch_size), 16)
+    args.num_workers = min(args.batch_size, 16)
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch_size,
@@ -781,13 +806,14 @@ def train(args):
         persistent_workers=True,
         drop_last=True,
     )
+    val_batch_size = max(args.batch_size // 4, 1)
     val_loader = DataLoader(
         val_dataset,
-        batch_size=max(args.batch_size // 4, 1),
+        batch_size=val_batch_size,
         shuffle=False,
         sampler=val_sampler,
         collate_fn=None,  # val_dataset.fast_collate,
-        num_workers=args.num_workers,
+        num_workers=val_batch_size,
         pin_memory=False,
         persistent_workers=True,
     )
@@ -850,6 +876,9 @@ def train(args):
             path,
         )
 
+    IMAGES = ["agl", "mag", "vflow"]
+    ERRORS = ["angle", "scale"]
+
     start_epoch = 0
     if not args.from_zero and args.resume:
         start_epoch = checkpoint["epoch"] + 1
@@ -877,18 +906,17 @@ def train(args):
             torch.distributed.all_gather_object(train_logs_out, train_logs[name])
             train_logs[name] = sum(train_logs_out) / len(train_logs_out)
 
-        if args.val_period > 0 and ((i + 1) % args.val_period) == 0:
-            valid_logs = val_epoch.run(val_loader, desc=desc)
-            # valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
-            # torch.distributed.all_gather_object(valid_logs_out, valid_logs)
-            # valid_lgs = {}
-            # for name in list(valid_logs):
-                # valid_lgs[name] = list(itertools.chain(*[x[name] for x in valid_logs_out]))
-            # valid_logs = valid_lgs
-            for name in list(valid_logs):
-                valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
-                torch.distributed.all_gather_object(valid_logs_out, valid_logs[name])
-                valid_logs[name] = valid_logs_out
+        valid_logs = val_epoch.run(val_loader, desc=desc)
+        # valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
+        # torch.distributed.all_gather_object(valid_logs_out, valid_logs)
+        # valid_lgs = {}
+        # for name in list(valid_logs):
+            # valid_lgs[name] = list(itertools.chain(*[x[name] for x in valid_logs_out]))
+        # valid_logs = valid_lgs
+        for name in list(valid_logs):
+            valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
+            torch.distributed.all_gather_object(valid_logs_out, valid_logs[name])
+            valid_logs[name] = valid_logs_out
 
         if args.local_rank == 0 and ((i + 1) % args.save_period) == 0:
             saver(
@@ -899,44 +927,32 @@ def train(args):
             scheduler.step()
 
         if args.local_rank == 0 and args.val_period > 0 and args.save_best:
-            r2_agl_per_city = {}
-            r2_mag_per_city = {}
+            rms_per_city = {
+                tpe: {}
+                for tpe in IMAGES + ERRORS
+            }
+            r2_per_city = {
+                tpe: {}
+                for tpe in IMAGES
+            }
             score_per_city = {}
             for city_index, city in enumerate(CITIES):
-                agl_error_sum = valid_logs["agl_error_sum"][city_index]
-                agl_gt_sq_sum = valid_logs["agl_gt_sq_sum"][city_index]
-                agl_sum = valid_logs["agl_sum"][city_index]
-                agl_count = valid_logs["agl_count"][city_index]
-                r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
+                for tpe in IMAGES:
+                    error_sum = valid_logs[f"{tpe}_error_sum"][city_index]
+                    gt_sq_sum = valid_logs[f"{tpe}_gt_sq_sum"][city_index]
+                    sm = valid_logs[f"{tpe}_sum"][city_index]
+                    count = valid_logs[f"{tpe}_count"][city_index]
+                    r2 = get_r2(error_sum, gt_sq_sum, sm, count)
+                    r2_per_city[tpe][city] = r2
 
-                r2_agl_per_city[city] = r2_agl
+                    rms = get_rms(valid_logs[f"{tpe}_rms"][city_index])
+                    rms_per_city[tpe][city] = rms
 
-                mag_error_sum = valid_logs["mag_error_sum"][city_index]
-                mag_gt_sq_sum = valid_logs["mag_gt_sq_sum"][city_index]
-                mag_sum = valid_logs["mag_sum"][city_index]
-                mag_count = valid_logs["mag_count"][city_index]
-                r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
+                for tpe in ERRORS:
+                    rms = get_rms(valid_logs[f"{tpe}_errors"][city_index])
+                    rms_per_city[tpe][city] = rms
 
-                r2_mag_per_city[city] = r2_mag
-
-                score_per_city[city] = (r2_agl + r2_mag) / 2
-
-            # agl_error_sum = sum(valid_logs["agl_error_sum"])
-            # agl_gt_sq_sum = sum(valid_logs["agl_gt_sq_sum"])
-            # agl_sum = sum(valid_logs["agl_sum"])
-            # agl_count = sum(valid_logs["agl_count"])
-            # r2_agl = get_r2(agl_error_sum, agl_gt_sq_sum, agl_sum, agl_count)
-
-            # mag_error_sum = sum(valid_logs["mag_error_sum"])
-            # mag_gt_sq_sum = sum(valid_logs["mag_gt_sq_sum"])
-            # mag_sum = sum(valid_logs["mag_sum"])
-            # mag_count = sum(valid_logs["mag_count"])
-            # r2_mag = get_r2(mag_error_sum, mag_gt_sq_sum, mag_sum, mag_count)
-
-            # angle_rms = get_rms(valid_logs["angle_errors"])
-            # scale_rms = get_rms(valid_logs["scale_errors"])
-            # agl_rms = get_rms(valid_logs["agl_rms"])
-            # mag_rms = get_rms(valid_logs["mag_rms"])
+                score_per_city[city] = (r2_per_city["agl"][city] + r2_per_city["vflow"][city]) / 2
 
             score = sum(score_per_city.values()) / len(score_per_city)
 
@@ -945,10 +961,14 @@ def train(args):
                     lr = param_group['lr']
                     summary_writer.add_scalar('group{}/lr'.format(idx), float(lr), global_step=i)
 
-                summary_writer.add_scalars('train/mse', train_logs, global_step=i)
+                summary_writer.add_scalars('train_loss/mse', train_logs, global_step=i)
 
-                summary_writer.add_scalars("val/r2_agl", r2_agl_per_city, global_step=i)
-                summary_writer.add_scalars("val/r2_mag", r2_mag_per_city, global_step=i)
+                for tpe in rms_per_city:
+                    summary_writer.add_scalars(f"val_rms/{tpe}", rms_per_city[tpe], global_step=i)
+
+                for tpe in r2_per_city:
+                    summary_writer.add_scalars(f"val_r2/{tpe}", r2_per_city[tpe], global_step=i)
+
                 summary_writer.add_scalars("val/scores", score_per_city, global_step=i)
                 summary_writer.add_scalar("val/score", score, global_step=i)
 
@@ -1136,5 +1156,5 @@ def test(args):
 
 
 def build_model(args):
-    model = UnetVFLOW(args.backbone, encoder_weights="imagenet")
+    model = UnetVFLOW(args.backbone, encoder_weights=args.encoder_weights)
     return model

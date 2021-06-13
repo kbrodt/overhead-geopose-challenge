@@ -18,6 +18,7 @@ class UnetVFLOW(nn.Module):
         decoder_use_batchnorm: bool = True,
         decoder_channels: List[int] = (256, 128, 64, 32, 16),
         in_channels: int = 3,
+        attention_type=None,  # "scse"
     ):
         super().__init__()
 
@@ -34,7 +35,7 @@ class UnetVFLOW(nn.Module):
             n_blocks=encoder_depth,
             use_batchnorm=decoder_use_batchnorm,
             center=True if encoder_name.startswith("vgg") else False,
-            attention_type=None,
+            attention_type=attention_type,
         )
 
         self.xydir_head = EncoderRegressionHead(
