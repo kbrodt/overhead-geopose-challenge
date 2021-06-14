@@ -789,13 +789,13 @@ def train(args):
 
     model = build_model(args)
     model = model.cuda()
-    if args.resume:
-        path_to_resume = Path(args.resume).expanduser()
+    if args.load:
+        path_to_resume = Path(args.load).expanduser()
         if path_to_resume.is_file():
             print(f"=> loading resume checkpoint '{path_to_resume}'")
             checkpoint = torch.load(
                 path_to_resume,
-                map_location=lambda storage, loc: storage.cuda(args.gpu),  # change here!
+                map_location=lambda storage, loc: storage.cuda(args.gpu),
             )
             new_state_dict = OrderedDict()
             for k, v in checkpoint["state_dict"].items():
@@ -943,7 +943,7 @@ def train(args):
     ERRORS = ["angle", "scale"]
 
     start_epoch = 0
-    if not args.from_zero and args.resume:
+    if args.resume:
         start_epoch = checkpoint["epoch"] + 1
         best_score = checkpoint["best_score"]
         if checkpoint["sched_state_dict"] is not None:

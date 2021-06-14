@@ -147,11 +147,11 @@ if __name__ == "__main__":
     )
     parser.add_argument("--distributed", action="store_true", help="distributed training")
     parser.add_argument("--deterministic", action="store_true", help="deterministic training")
-    parser.add_argument("--resume", type=str, default="", help="path to pretrained model to resume training")
+    parser.add_argument("--load", type=str, default="", help="path to pretrained model weights")
+    parser.add_argument("--resume", action="store_true", help="path to pretrained model to resume training")
     parser.add_argument("--lmdb", type=str, default=None, help="path to lmdb")
     parser.add_argument('--channels-last', action='store_true', help='Use channels_last memory layout')
     parser.add_argument('--prefetch', action='store_true', help='Use prefetching')
-    parser.add_argument('--from-zero', action='store_true', help='Do not load optimizaer and scheduler state dicts')
     parser.add_argument("--pl-dir", type=str, default=None, help="path to lmdb")
 
     args = parser.parse_args()
