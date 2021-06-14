@@ -153,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('--channels-last', action='store_true', help='Use channels_last memory layout')
     parser.add_argument('--prefetch', action='store_true', help='Use prefetching')
     parser.add_argument("--pl-dir", type=str, default=None, help="path to lmdb")
+    parser.add_argument("--city", type=str, default=None, help="city name")
 
     args = parser.parse_args()
     print(args)

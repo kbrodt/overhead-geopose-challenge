@@ -843,12 +843,28 @@ def train(args):
         model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
     
     df = pd.read_csv(args.train_path_df)
+
     train_df, dev_df = train_dev_split(df, args)
+
+    if args.city is not None:
+        train_df["city"] = train_df.agl.str.split("_").str[0]
+        train_df = train_df[train_df.city.isin([args.city])].reset_index(drop=True)
+        del train_df["city"]
+
+        dev_df["city"] = dev_df.agl.str.split("_").str[0]
+        dev_df = dev_df[dev_df.city.isin([args.city])].reset_index(drop=True)
+        del dev_df["city"]
+
+    train_dataset = Dataset(train_df, args=args, is_val=False)
 
     CITIES = ["ARG", "ATL", "JAX", "OMA"]
     assert len(CITIES) == torch.distributed.get_world_size()
-    train_dataset = Dataset(train_df, args=args, is_val=False)
-    dev_df = dev_df[dev_df.area == CITIES[args.local_rank]].reset_index(drop=True)
+
+    if args.city is not None:
+        CITIES = [args.city]
+    else:
+        dev_df = dev_df[dev_df.area == CITIES[args.local_rank]].reset_index(drop=True)
+
     val_dataset = Dataset(dev_df, args=args, is_val=True)
 
     train_sampler = None
@@ -980,6 +996,11 @@ def train(args):
             valid_logs_out = [None for _ in range(torch.distributed.get_world_size())]
             torch.distributed.all_gather_object(valid_logs_out, valid_logs[name])
             valid_logs[name] = valid_logs_out
+            if args.city is not None:
+                if isinstance(valid_logs[0], list):
+                    valid_logs[name] = [list(itertools.chain(*valid_logs))]
+                else:
+                    valid_logs[name] = [sum(valid_logs)]
 
         if args.local_rank == 0 and ((i + 1) % args.save_period) == 0:
             saver(
