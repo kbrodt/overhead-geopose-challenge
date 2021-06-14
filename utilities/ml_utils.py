@@ -41,7 +41,7 @@ from utilities.misc_utils import (
     get_r2,
     save_image,
 )
-from utilities.augmentation_vflow import augment_vflow
+from utilities.augmentation_vflow import augment_vflow, warp_agl
 from utilities.unet_vflow import UnetVFLOW
 
 
@@ -237,6 +237,69 @@ class Dataset(BaseDataset):
 #         for i in range(batch_size):
 #             tensor[i] += torch.from_numpy(batch[i][0])
 #         return tensor, targets
+
+class DatasetPL(BaseDataset):
+    def __init__(
+        self,
+        rgb_dir,
+        pred_dir,
+        args,
+    ):
+        # create all paths with respect to RGB path ordering to maintain alignment of samples
+        dataset_dir = Path(args.dataset_dir) / rgb_dir
+        rgb_paths = list(dataset_dir.glob(f"*_RGB.{args.rgb_suffix}"))
+        pred_dir = Path(pred_dir)
+        agl_paths = list(
+            pred_dir / pth.with_name(pth.name.replace("_RGB", "_AGL")).with_suffix(".tif").name
+            for pth in rgb_paths
+        )
+        vflow_paths = list(
+            pred_dir / pth.with_name(pth.name.replace("_RGB", "_VFLOW")).with_suffix(".json").name
+            for pth in rgb_paths
+        )
+
+        self.paths_list = [
+            (rgb_paths[i], vflow_paths[i], agl_paths[i])
+            for i in range(len(rgb_paths))
+        ]
+
+        self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
+            args.backbone, args.encoder_weights  # "imagenet"
+        )
+
+        import copy
+        self.args = copy.deepcopy(args)
+        self.args.unit = "m"
+        self.max_building_agl = 200.0
+        self.max_factor = 2.0
+
+    def __getitem__(self, i):
+        rgb_path, vflow_path, agl_path = self.paths_list[i]
+        image = load_image(rgb_path, self.args, use_cv=True)
+        agl = load_image(agl_path, self.args)
+
+        mag, _, _, vflow_data = load_vflow(vflow_path, agl, self.args)
+
+        max_agl = np.max(agl)
+        assert max_agl > 0
+
+        max_scale_agl = min(self.max_factor, (self.max_building_agl / max_agl))
+        # scale_heights = [(1 + max_scale_agl) / 2, max_scale_agl]
+        scale_heights = [max_scale_agl]
+        images_aug = [image]
+        images_aug.extend([
+            warp_agl(image, mag, vflow_data["angle"], agl, scale_height, self.max_factor)[0]
+            for scale_height in scale_heights
+        ])
+
+        images_aug = [image.astype("uint8") for image in images_aug]
+        images_aug = [self.preprocessing_fn(image).astype("float32") for image in images_aug]
+        images_aug = [np.transpose(image, (2, 0, 1)) for image in images_aug]
+
+        return images_aug, str(rgb_path)
+
+    def __len__(self):
+        return len(self.paths_list)
 
 
 class PrefetchLoader:
@@ -1011,7 +1074,11 @@ def test(args):
     with torch.no_grad():
         # model = torch.jit.trace(model, torch.rand(2, 3, 512, 512).cuda())
 
-        test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args, is_val=True)
+        if args.pl_dir is not None:
+            test_dataset = DatasetPL(rgb_dir=args.test_sub_dir, pred_dir=args.pl_dir, args=args)
+        else:
+            test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args, is_val=True)
+
         args.num_workers = min(max(args.num_workers, args.batch_size), 16)
         test_loader = DataLoader(
             test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
@@ -1019,9 +1086,25 @@ def test(args):
         predictions_dir = Path(args.predictions_dir)
         for images, rgb_paths in tqdm(test_loader, mininterval=2):
 
+            images_h = []
+            if isinstance(images, list):
+                images, *images_h = images
+
             images = images.to("cuda", non_blocking=True)
             pred = model(images)
             pred = list(pred)
+            # print(pred[0])
+
+            for imgs in images_h[-1:]:
+                imgs = imgs.to("cuda", non_blocking=True)
+                features = model.encoder(imgs)
+                xydir = model.xydir_head(features[-1])
+                # print(xydir)
+                pred[0] = xydir
+
+            # print(pred[0])
+            # pred[0] /= 1 + len(images_h)
+            assert (len(images_h) > 0 and args.tta == 1) or (len(images_h) == 0 and args.tta >= 1)
 
             if args.tta > 1:  # vertical flip
                 pred_tta = model(torch.flip(images, dims=[-1]))
