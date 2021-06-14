@@ -823,7 +823,6 @@ def train(args):
     else:
         parameters = model.parameters()
 
-    parameters = model.parameters()
     optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
         parameters,
         adam_w_mode=True,
