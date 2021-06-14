@@ -870,7 +870,13 @@ def train(args):
     val_sampler = None
     if args.distributed:
         train_sampler = torch.utils.data.distributed.DistributedSampler(train_dataset)
-        val_sampler = torch.utils.data.distributed.DistributedSampler(val_dataset)
+        # if args.city is not None:
+        # If each rank has own city, so we need to use default sampler.
+        # Otherwise distributed sampler devides dataset amount other workers.
+        val_sampler = torch.utils.data.distributed.DistributedSampler(
+            val_dataset,
+            shuffle=False,
+        )
 
     args.num_workers = min(args.batch_size, 16)
     train_loader = DataLoader(
@@ -901,10 +907,10 @@ def train(args):
     
     scheduler = None
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            # optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
+        # optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
     # )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=5 * args.T_max, T_mult=1, eta_min=max(args.learning_rate * 1e-2, 1e-6)  # T_mult=sqrt(2)
+        optimizer, T_0=5 * args.T_max, T_mult=1, eta_min=max(args.learning_rate * 1e-2, 1e-6)  # T_mult=sqrt(2)
     )
 
     scaler = None
