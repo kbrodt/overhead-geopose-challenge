@@ -1010,7 +1010,7 @@ def train(args):
         if scheduler is not None:
             scheduler.step()
 
-        if args.local_rank == 0 and args.val_period > 0 and args.save_best:
+        if args.local_rank == 0 and args.val_period > 0:
             rms_per_city = {
                 tpe: {}
                 for tpe in IMAGES + ERRORS
