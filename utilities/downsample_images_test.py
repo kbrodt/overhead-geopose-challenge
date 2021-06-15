@@ -1,10 +1,9 @@
 import argparse
-import cv2
-import numpy as np
 from pathlib import Path
+
+import cv2
+from misc_utils import load_image, save_image
 from tqdm import tqdm
-import json
-from misc_utils import load_image, load_vflow, save_image
 
 
 def downsample_images(args, downsample=2):
@@ -13,22 +12,30 @@ def downsample_images(args, downsample=2):
 
     outdir.mkdir(exist_ok=True)
     rgb_paths = list(indir.glob(f"*_RGB.{args.rgb_suffix}"))
-    if rgb_paths == []: rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}")) # original file names
+    if rgb_paths == []:
+        rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}"))  # original file names
 
     for rgb_path in tqdm(rgb_paths):
         # load
-        rgb = load_image(rgb_path, args, use_cv=True)  # args.unit used to convert units on load
+        rgb = load_image(
+            rgb_path, args, use_cv=True
+        )  # args.unit used to convert units on load
         assert len(rgb.shape) == 3
 
         # downsample
         if downsample > 1:
-            target_shape = (int(rgb.shape[0] / downsample), int(rgb.shape[1] / downsample))
+            target_shape = (
+                int(rgb.shape[0] / downsample),
+                int(rgb.shape[1] / downsample),
+            )
             rgb = cv2.resize(rgb, target_shape)
 
         # save
         # units are NOT converted back here, so are in m
-#        save_image((outdir / rgb_path.name), rgb)
-        save_image((outdir / rgb_path.name.replace(args.rgb_suffix, "tif")), rgb) # save as tif to be consistent with old code
+        #        save_image((outdir / rgb_path.name), rgb)
+        save_image(
+            (outdir / rgb_path.name.replace(args.rgb_suffix, "tif")), rgb
+        )  # save as tif to be consistent with old code
 
 
 if __name__ == "__main__":

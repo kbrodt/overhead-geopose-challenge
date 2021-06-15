@@ -1,27 +1,25 @@
 import argparse
-import multiprocessing
-import cv2
-import numpy as np
-from pathlib import Path
-from tqdm import tqdm
 import json
-import lmdb
+import multiprocessing
 import pickle
+from pathlib import Path
+
+import cv2
+import lmdb
 from misc_utils import load_image, load_vflow, save_image
+from tqdm import tqdm
 
 
 def load(rgb_path):
-    indir = Path(args.indir)
-    outdir = Path(args.outdir)
-    
-    # load
-    agl_path = rgb_path.with_name(
-        rgb_path.name.replace("_RGB", "_AGL")
-    ).with_suffix(".tif")
+    agl_path = rgb_path.with_name(rgb_path.name.replace("_RGB", "_AGL")).with_suffix(
+        ".tif"
+    )
     vflow_path = rgb_path.with_name(
         rgb_path.name.replace("_RGB", "_VFLOW")
     ).with_suffix(".json")
-    rgb = load_image(rgb_path, args, use_cv=True)  # args.unit used to convert units on load
+    rgb = load_image(
+        rgb_path, args, use_cv=True
+    )  # args.unit used to convert units on load
     assert len(rgb.shape) == 3
     agl = load_image(agl_path, args)  # args.unit used to convert units on load
     _, _, _, vflow_data = load_vflow(
@@ -30,7 +28,10 @@ def load(rgb_path):
 
     # downsample
     if args.downsample > 1:
-        target_shape = (int(rgb.shape[0] / args.downsample), int(rgb.shape[1] / args.downsample))
+        target_shape = (
+            int(rgb.shape[0] / args.downsample),
+            int(rgb.shape[1] / args.downsample),
+        )
         rgb = cv2.resize(rgb, target_shape)
         agl = cv2.resize(agl, target_shape, interpolation=cv2.INTER_NEAREST)
         vflow_data["scale"] /= args.downsample
@@ -39,12 +40,16 @@ def load(rgb_path):
 
 
 def load_save(rgb_path):
+    outdir = Path(args.outdir)
+
     (rgb, agl, vflow_data), (rgb_path, agl_path, vflow_path) = load(rgb_path)
 
     # save
     # units are NOT converted back here, so are in m
-#    save_image((outdir / rgb_path.name), rgb)
-    save_image((outdir / rgb_path.name.replace(args.rgb_suffix, "tif")), rgb) # save as tif to be consistent with old code
+    #    save_image((outdir / rgb_path.name), rgb)
+    save_image(
+        (outdir / rgb_path.name.replace(args.rgb_suffix, "tif")), rgb
+    )  # save as tif to be consistent with old code
     save_image((outdir / agl_path.name), agl)
     with open((outdir / vflow_path.name), "w") as outfile:
         json.dump(vflow_data, outfile)
@@ -57,11 +62,11 @@ def downsample_images(args):
     outdir.mkdir(exist_ok=True)
     rgb_paths = list(indir.glob(f"*_RGB.{args.rgb_suffix}"))
     if rgb_paths == []:
-        rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}")) # original file names
+        rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}"))  # original file names
 
     # for rgb_path in tqdm(rgb_paths):
     #     load_save(rgb_path, args)
-    
+
     with multiprocessing.Pool(args.n_jobs) as p:
         _ = list(p.imap_unordered(func=load_save, iterable=tqdm(rgb_paths)))
 
@@ -73,7 +78,7 @@ def save_to_db(args):
     outdir.mkdir(exist_ok=True)
     rgb_paths = list(indir.glob(f"*_RGB.{args.rgb_suffix}"))
     if rgb_paths == []:
-        rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}")) # original file names
+        rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}"))  # original file names
 
     # for rgb_path in tqdm(rgb_paths):
     #     load_save(rgb_path, args)
@@ -83,8 +88,8 @@ def save_to_db(args):
 
     # items = []
     # for rgb_path in tqdm(rgb_paths):
-        # items.append(load(rgb_path))
-        # break
+    # items.append(load(rgb_path))
+    # break
 
     map_size = 0
     for item in items:

@@ -1,7 +1,7 @@
 import argparse
 import os
-import numpy as np
-from utilities.ml_utils import train, test
+
+from utilities.ml_utils import test, train
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -144,13 +144,25 @@ if __name__ == "__main__":
         help="gpu",
         default=0,
     )
-    parser.add_argument("--distributed", action="store_true", help="distributed training")
-    parser.add_argument("--deterministic", action="store_true", help="deterministic training")
-    parser.add_argument("--load", type=str, default="", help="path to pretrained model weights")
-    parser.add_argument("--resume", action="store_true", help="path to pretrained model to resume training")
+    parser.add_argument(
+        "--distributed", action="store_true", help="distributed training"
+    )
+    parser.add_argument(
+        "--deterministic", action="store_true", help="deterministic training"
+    )
+    parser.add_argument(
+        "--load", type=str, default="", help="path to pretrained model weights"
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="path to pretrained model to resume training",
+    )
     parser.add_argument("--lmdb", type=str, default=None, help="path to lmdb")
-    parser.add_argument('--channels-last', action='store_true', help='Use channels_last memory layout')
-    parser.add_argument('--prefetch', action='store_true', help='Use prefetching')
+    parser.add_argument(
+        "--channels-last", action="store_true", help="Use channels_last memory layout"
+    )
+    parser.add_argument("--prefetch", action="store_true", help="Use prefetching")
     parser.add_argument("--pl-dir", type=str, default=None, help="path to lmdb")
     parser.add_argument("--city", type=str, default=None, help="city name")
 
@@ -161,7 +173,7 @@ if __name__ == "__main__":
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
-    
+
     if args.train:
         os.makedirs(args.checkpoint_dir, exist_ok=True)
         train(args)

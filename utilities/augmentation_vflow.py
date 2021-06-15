@@ -1,10 +1,7 @@
-import os
-import math
-import numpy as np
 import cv2
+import numpy as np
 
 from utilities.invert_flow import invert_flow
-
 
 RNG = np.random.RandomState(1234)
 
@@ -103,7 +100,9 @@ def rotate_image(image, mag, agl, angle, image_only=False):
     image_rotated = (
         None
         if image is None
-        else cv2.warpAffine(image, rot_mat, (wnew, hnew), flags=cv2.INTER_LINEAR)  # , borderMode=cv2.BORDER_REFLECT_101)
+        else cv2.warpAffine(
+            image, rot_mat, (wnew, hnew), flags=cv2.INTER_LINEAR
+        )  # , borderMode=cv2.BORDER_REFLECT_101)
     )
     if image_rotated is not None:
         r1, c1, r2, c2 = get_crop_region(image_rotated, image)
@@ -113,9 +112,13 @@ def rotate_image(image, mag, agl, angle, image_only=False):
     agl_rotated = (
         None
         if agl is None
-        else cv2.warpAffine(agl, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST)  # , borderMode=cv2.BORDER_REFLECT_101)
+        else cv2.warpAffine(
+            agl, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST
+        )  # , borderMode=cv2.BORDER_REFLECT_101)
     )
-    mag_rotated = cv2.warpAffine(mag, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST)  # , borderMode=cv2.BORDER_REFLECT_101)
+    mag_rotated = cv2.warpAffine(
+        mag, rot_mat, (wnew, hnew), flags=cv2.INTER_NEAREST
+    )  # , borderMode=cv2.BORDER_REFLECT_101)
     if image_rotated is None:
         r1, c1, r2, c2 = get_crop_region(mag_rotated, mag)
     mag_rotated = mag_rotated[r1:r2, c1:c2]

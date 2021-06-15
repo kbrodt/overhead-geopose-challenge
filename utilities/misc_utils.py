@@ -1,12 +1,11 @@
-from pathlib import Path
-from osgeo import gdal
-import numpy as np
 import json
-import os
-import cv2
-from tqdm import tqdm
-from PIL import Image
+from pathlib import Path
 
+import cv2
+import numpy as np
+from osgeo import gdal
+from PIL import Image
+from tqdm import tqdm
 
 UNITS_PER_METER_CONVERSION_FACTORS = {"cm": 100.0, "m": 1.0}
 
@@ -45,7 +44,7 @@ def load_image(
     image_path = Path(image_path)
     if not image_path.exists():
         return None
-    
+
     if use_cv:
         image = cv2.imread(str(image_path), -1)
         if len(image.shape) == 3:
@@ -87,13 +86,18 @@ def load_vflow(
 
     xdir, ydir = np.sin(vflow_data["angle"]), np.cos(vflow_data["angle"])
     mag = agl * vflow_data["scale"]
-    
-    vflow_items = [mag.astype(dtype_out), xdir.astype(dtype_out), ydir.astype(dtype_out), vflow_data]
+
+    vflow_items = [
+        mag.astype(dtype_out),
+        xdir.astype(dtype_out),
+        ydir.astype(dtype_out),
+        vflow_data,
+    ]
 
     if return_vflow_pred_mat:
-        vflow = np.zeros((agl.shape[0],agl.shape[1],2))
-        vflow[:,:,0] = mag * xdir
-        vflow[:,:,1] = mag * ydir
+        vflow = np.zeros((agl.shape[0], agl.shape[1], 2))
+        vflow[:, :, 0] = mag * xdir
+        vflow[:, :, 1] = mag * ydir
         vflow_items.insert(0, vflow)
 
     return vflow_items

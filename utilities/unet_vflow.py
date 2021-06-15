@@ -1,12 +1,11 @@
-from segmentation_models_pytorch.base import initialization as init
+from typing import List
 
-import torch.nn as nn
 import torch
-from segmentation_models_pytorch.base.modules import Flatten, Activation
-
-from typing import Optional, Union, List
-from segmentation_models_pytorch.unet.decoder import UnetDecoder
+import torch.nn as nn
+from segmentation_models_pytorch.base import initialization as init
+from segmentation_models_pytorch.base.modules import Activation, Flatten
 from segmentation_models_pytorch.encoders import get_encoder
+from segmentation_models_pytorch.unet.decoder import UnetDecoder
 
 
 class UnetVFLOW(nn.Module):
