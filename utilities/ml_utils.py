@@ -911,7 +911,7 @@ def train(args):
         # Otherwise distributed sampler devides dataset amount other workers.
         val_sampler = torch.utils.data.distributed.DistributedSampler(
             val_dataset,
-            shuffle=False,
+            shuffle=args.city is None,
         )
 
     args.num_workers = min(args.batch_size, 16)
@@ -1014,6 +1014,8 @@ def train(args):
     for i in range(start_epoch, args.num_epochs):
         if args.distributed:
             train_sampler.set_epoch(i)
+            if val_sampler is None:
+                val_sampler.set_epoch(i)
 
         desc = f"{i}/{args.num_epochs}"
         train_logs = train_epoch.run(train_loader, desc=desc)
