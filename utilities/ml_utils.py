@@ -1040,10 +1040,10 @@ def train(args):
             torch.distributed.all_gather_object(valid_logs_out, valid_logs[name])
             valid_logs[name] = valid_logs_out
             if args.city is not None:
-                if isinstance(valid_logs[0], list):
-                    valid_logs[name] = [list(itertools.chain(*valid_logs))]
+                if isinstance(valid_logs[name][0], list):
+                    valid_logs[name] = [list(itertools.chain(*valid_logs[name]))]
                 else:
-                    valid_logs[name] = [sum(valid_logs)]
+                    valid_logs[name] = [sum(valid_logs[name])]
 
         if args.local_rank == 0 and ((i + 1) % args.save_period) == 0:
             saver(
