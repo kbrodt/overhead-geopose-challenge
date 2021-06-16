@@ -18,6 +18,7 @@ class UnetVFLOW(nn.Module):
         decoder_channels: List[int] = (256, 128, 64, 32, 16),
         in_channels: int = 3,
         attention_type=None,  # "scse"
+        use_city=False,
     ):
         super().__init__()
 
@@ -28,8 +29,14 @@ class UnetVFLOW(nn.Module):
             weights=encoder_weights,
         )
 
+        if use_city:
+            enc_out_channels = self.encoder.out_channels[:-1] + (self.encoder.out_channels[-1] + 5, )  # city ohe dim
+        else:
+            enc_out_channels = self.encoder.out_channels
+
+
         self.decoder = UnetDecoder(
-            encoder_channels=self.encoder.out_channels,
+            encoder_channels=enc_out_channels,
             decoder_channels=decoder_channels,
             n_blocks=encoder_depth,
             use_batchnorm=decoder_use_batchnorm,
@@ -38,7 +45,7 @@ class UnetVFLOW(nn.Module):
         )
 
         self.xydir_head = EncoderRegressionHead(
-            in_channels=self.encoder.out_channels[-1],
+            in_channels=enc_out_channels[-1],
             out_channels=2,
         )
 
@@ -67,8 +74,22 @@ class UnetVFLOW(nn.Module):
         init.initialize_head(self.scale_head)
 
     def forward(self, x):
+        use_city = isinstance(x, tuple)
+        if use_city:
+            x, city, gsd = x
 
         features = self.encoder(x)
+        if use_city:
+            size = features[-1].size(2)
+            features[-1] = torch.cat(
+                [
+                    features[-1],
+                    nn.functional.interpolate(city, size=(size, size), mode="nearest"),
+                    nn.functional.interpolate(gsd, size=(size, size), mode="nearest"),
+                ],
+                dim=1,
+            )
+
         decoder_output = self.decoder(*features)
 
         xydir = self.xydir_head(features[-1])

@@ -48,25 +48,16 @@ if __name__ == "__main__":
         "--dataset-dir", type=str, help="dataset directory", default="./dataset"
     )
     parser.add_argument(
-        "--train-sub-dir",
-        type=str,
-        help="train folder within datset-dir",
-        default="train",
-    )
-    parser.add_argument(
         "--train-path-df",
         type=str,
         help="path to train df",
         default="geopose_train.csv",
     )
     parser.add_argument(
-        "--test-sub-dir", type=str, help="test folder within datset-dir", default="test"
-    )
-    parser.add_argument(
-        "--valid-sub-dir",
+        "--test-path-df",
         type=str,
-        help="validation folder within datset-dir",
-        default="valid",
+        help="path to test df",
+        default="geopose_test.csv",
     )
     parser.add_argument("--backbone", type=str, default="resnet34")
     parser.add_argument("--encoder-weights", type=str, default="imagenet")
@@ -165,6 +156,7 @@ if __name__ == "__main__":
     parser.add_argument("--prefetch", action="store_true", help="Use prefetching")
     parser.add_argument("--pl-dir", type=str, default=None, help="path to lmdb")
     parser.add_argument("--city", type=str, default=None, help="city name")
+    parser.add_argument("--use-city", action="store_true", help="Use city ohe in decoder")
 
     args = parser.parse_args()
     print(args)

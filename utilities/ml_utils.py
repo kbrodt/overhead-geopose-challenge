@@ -82,41 +82,27 @@ albu_train = A.Compose(
 class Dataset(BaseDataset):
     def __init__(
         self,
-        sub_dir,
+        df,
         args,
         rng=RNG,
         is_val=False,
+        cities=None,
+        is_test=False,
     ):
-
-        self.is_test = False
+        self.is_test = is_test
         self.is_val = is_val
         self.rng = rng
-        if isinstance(sub_dir, str):
-            assert sub_dir == args.test_sub_dir
-            assert self.is_val
-            self.is_test = sub_dir == args.test_sub_dir
+        dataset_dir = Path(args.dataset_dir)
+        rgb_paths = df.rgb.apply(
+            lambda x: (dataset_dir / x).with_suffix(f".{args.rgb_suffix}")
+        ).tolist()
 
-            # create all paths with respect to RGB path ordering to maintain alignment of samples
-            dataset_dir = Path(args.dataset_dir) / sub_dir
-            rgb_paths = list(dataset_dir.glob(f"*_RGB.{args.rgb_suffix}"))
-            agl_paths = list(
-                pth.with_name(pth.name.replace("_RGB", "_AGL")).with_suffix(".tif")
-                for pth in rgb_paths
-            )
-            vflow_paths = list(
-                pth.with_name(pth.name.replace("_RGB", "_VFLOW")).with_suffix(".json")
-                for pth in rgb_paths
-            )
-        else:
-            rgb_paths = sub_dir.rgb.apply(
-                lambda x: (Path(args.dataset_dir) / x).with_suffix(
-                    f".{args.rgb_suffix}"
-                )
-            ).tolist()
-            agl_paths = sub_dir.agl.apply(lambda x: Path(args.dataset_dir) / x).tolist()
-            vflow_paths = sub_dir.json.apply(
-                lambda x: Path(args.dataset_dir) / x
-            ).tolist()
+        if not self.is_test:
+            agl_paths = df.agl.apply(lambda x: dataset_dir / x).tolist()
+            vflow_paths = df.json.apply(lambda x: dataset_dir / x).tolist()
+
+        self.gsd = df.gsd.tolist()
+        self.city = df.city.tolist()
 
         if self.is_test:
             self.paths_list = rgb_paths
@@ -126,12 +112,6 @@ class Dataset(BaseDataset):
                 for i in range(len(rgb_paths))
             ]
 
-            self.paths_list = [
-                self.paths_list[ind]
-                for ind in self.rng.permutation(len(self.paths_list))
-            ]
-            if args.sample_size is not None:
-                self.paths_list = self.paths_list[: args.sample_size]
         self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
             args.backbone, args.encoder_weights  # "imagenet"
         )
@@ -146,6 +126,7 @@ class Dataset(BaseDataset):
             )
 
         self.args = args
+        self.cities = cities
 
     def __getitem__(self, i):
 
@@ -214,6 +195,16 @@ class Dataset(BaseDataset):
 
         image = self.preprocessing_fn(image).astype("float32")
         image = np.transpose(image, (2, 0, 1))
+
+        if self.cities is not None:
+            city_str = self.city[i]
+            city = np.zeros((len(self.cities), 1, 1), dtype="float32")
+            city[self.cities.index(city_str)] = 1
+
+            gsd = np.zeros((1, 1, 1), dtype="float32")
+            gsd[0] = self.gsd[i]
+
+            image = image, city, gsd
 
         if self.is_test:
             return image, str(rgb_path)
@@ -442,7 +433,16 @@ class Epoch:
             image, xydir, agl, mag, scale = itr_data
             scale = torch.unsqueeze(scale, 1)
 
+            use_city = isinstance(image, (tuple, list))
+            if use_city:
+                image, city, gsd = image
+                city = city.to(self.device, non_blocking=True)
+                gsd = gsd.to(self.device, non_blocking=True)
+
             image = image.to(self.device, non_blocking=True)
+
+            if use_city:
+                image = image, city, gsd
 
             if self.stage_name != "valid":
                 xydir, agl, mag, scale = (
@@ -878,29 +878,27 @@ def train(args):
         model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
 
     df = pd.read_csv(args.train_path_df)
+    metadata = pd.read_csv(Path(args.train_path_df).with_name("metadata.csv"))
+    df = pd.merge(df, metadata, on="id")
 
     train_df, dev_df = train_dev_split(df, args)
 
     if args.city is not None:
-        train_df["city"] = train_df.agl.str.split("_").str[0]
         train_df = train_df[train_df.city.isin([args.city])].reset_index(drop=True)
-        del train_df["city"]
-
-        dev_df["city"] = dev_df.agl.str.split("_").str[0]
         dev_df = dev_df[dev_df.city.isin([args.city])].reset_index(drop=True)
-        del dev_df["city"]
-
-    train_dataset = Dataset(train_df, args=args, is_val=False)
 
     CITIES = ["ARG", "ATL", "JAX", "OMA"]
     assert len(CITIES) == torch.distributed.get_world_size()
+
+    cities = CITIES if args.use_city else None
+    train_dataset = Dataset(train_df, args=args, is_val=False, cities=cities)
 
     if args.city is not None:
         CITIES = [args.city]
     else:
         dev_df = dev_df[dev_df.area == CITIES[args.local_rank]].reset_index(drop=True)
 
-    val_dataset = Dataset(dev_df, args=args, is_val=True)
+    val_dataset = Dataset(dev_df, args=args, is_val=True, cities=cities)
 
     train_sampler = None
     val_sampler = None
@@ -1136,6 +1134,13 @@ def test(args):
     model.to("cuda")
     model.eval()
 
+    df = pd.read_csv(args.test_path_df)
+    metadata = pd.read_csv(Path(args.test_path_df).with_name("metadata.csv"))
+    df = pd.merge(df, metadata, on="id")
+
+    CITIES = ["ARG", "ATL", "JAX", "OMA"]
+    cities = CITIES if args.use_city else None
+
     # if 'efficientnet' in args.backbone:
     #     model.encoder.set_swish(memory_efficient=False)
 
@@ -1147,7 +1152,9 @@ def test(args):
                 rgb_dir=args.test_sub_dir, pred_dir=args.pl_dir, args=args
             )
         else:
-            test_dataset = Dataset(sub_dir=args.test_sub_dir, args=args, is_val=True)
+            test_dataset = Dataset(
+                df, args=args, is_val=True, cities=cities, is_test=True
+            )
 
         args.num_workers = min(max(args.num_workers, args.batch_size), 16)
         test_loader = DataLoader(
@@ -1160,11 +1167,21 @@ def test(args):
         for images, rgb_paths in tqdm(test_loader, mininterval=2):
 
             images_h = []
-            if isinstance(images, list):
+            if args.pl_dir is not None:
                 images, *images_h = images
 
+            if args.use_city:
+                images, city, gsd = images
+                city = city.to("cuda", non_blocking=True)
+                gsd = gsd.to("cuda", non_blocking=True)
+
             images = images.to("cuda", non_blocking=True)
-            pred = model(images)
+
+            if args.use_city:
+                pred = model((images, city, gsd))
+            else:
+                pred = model(images)
+
             pred = list(pred)
             # print(pred[0])
 
@@ -1182,7 +1199,10 @@ def test(args):
             )
 
             if args.tta > 1:  # vertical flip
-                pred_tta = model(torch.flip(images, dims=[-1]))
+                if args.use_city:
+                    pred_tta = model((torch.flip(images, dims=[-1]), city, gsd))
+                else:
+                    pred_tta = model(torch.flip(images, dims=[-1]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 0] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
@@ -1192,7 +1212,10 @@ def test(args):
                 pred[3] += scale_pred_tta
 
             if args.tta > 2:  # horizontal flip
-                pred_tta = model(torch.flip(images, dims=[-2]))
+                if args.use_city:
+                    pred_tta = model((torch.flip(images, dims=[-2]), city, gsd))
+                else:
+                    pred_tta = model(torch.flip(images, dims=[-2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 1] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
@@ -1202,7 +1225,10 @@ def test(args):
                 pred[3] += scale_pred_tta
 
             if args.tta > 3:  # vertical+horizontal flip
-                pred_tta = model(torch.flip(images, dims=[-1, -2]))
+                if args.use_city:
+                    pred_tta = model((torch.flip(images, dims=[-1, -2]), city, gsd))
+                else:
+                    pred_tta = model(torch.flip(images, dims=[-1, -2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
@@ -1214,7 +1240,10 @@ def test(args):
             if args.tta > 7:  # rotate90
                 images_rot90 = torch.rot90(images, k=1, dims=[-2, -1])
 
-                pred_tta = model(images_rot90)
+                if args.use_city:
+                    pred_tta = model((images_rot90, city, gsd))
+                else:
+                    pred_tta = model(images_rot90)
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta = torch.stack(
                     [-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1
@@ -1226,7 +1255,10 @@ def test(args):
                 pred[3] += scale_pred_tta
 
                 # vertical flip
-                pred_tta = model(torch.flip(images_rot90, dims=[-1]))
+                if args.use_city:
+                    pred_tta = model((torch.flip(images_rot90, dims=[-1]), city, gsd))
+                else:
+                    pred_tta = model(torch.flip(images_rot90, dims=[-1]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 0] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
@@ -1240,7 +1272,10 @@ def test(args):
                 pred[3] += scale_pred_tta
 
                 # horizontal flip
-                pred_tta = model(torch.flip(images_rot90, dims=[-2]))
+                if args.use_city:
+                    pred_tta = model((torch.flip(images_rot90, dims=[-2]), city, gsd))
+                else:
+                    pred_tta = model(torch.flip(images_rot90, dims=[-2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 1] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
@@ -1254,7 +1289,12 @@ def test(args):
                 pred[3] += scale_pred_tta
 
                 # vertical+horizontal flip
-                pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
+                if args.use_city:
+                    pred_tta = model(
+                        (torch.flip(images_rot90, dims=[-1, -2]), city, gsd)
+                    )
+                else:
+                    pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
@@ -1322,5 +1362,7 @@ def test(args):
 
 
 def build_model(args):
-    model = UnetVFLOW(args.backbone, encoder_weights=args.encoder_weights)
+    model = UnetVFLOW(
+        args.backbone, encoder_weights=args.encoder_weights, use_city=args.use_city
+    )
     return model
