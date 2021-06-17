@@ -10,32 +10,13 @@ if __name__ == "__main__":
     )
     parser.add_argument("--train", action="store_true", help="train model")
     parser.add_argument("--test", action="store_true", help="generate test predictions")
-    parser.add_argument("--gpus", type=str, default="0")
     parser.add_argument(
-        "--num-workers", type=int, help="number of data loader workers", default=1
+        "--num-workers", type=int, help="number of data loader workers", default=8
     )
     parser.add_argument(
-        "--num-epochs", type=int, help="number of epochs to train", default=205
-    )
-    parser.add_argument(
-        "--save-period",
-        type=int,
-        help="epoch frequency to save model checkpoints",
-        default=1,
-    )
-    parser.add_argument(
-        "--val-period",
-        type=int,
-        help="epoch frequency for running validation (zero if none)",
-        default=1,
+        "--num-epochs", type=int, help="number of epochs to train", default=1005
     )
     parser.add_argument("--batch-size", type=int, help="batch size", default=4)
-    parser.add_argument(
-        "--downsample",
-        type=int,
-        help="factor for downsampling image at test time",
-        default=1,
-    )
     parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints")
     parser.add_argument("--predictions-dir", type=str, default="./predictions")
     parser.add_argument(
@@ -59,24 +40,18 @@ if __name__ == "__main__":
         help="path to test df",
         default="geopose_test.csv",
     )
-    parser.add_argument("--backbone", type=str, default="resnet34")
+    parser.add_argument("--backbone", type=str, default="sene154")
     parser.add_argument("--encoder-weights", type=str, default="imagenet")
     parser.add_argument("--learning-rate", type=float, default=0.0001)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
     parser.add_argument("--T-max", type=int, default=5)
-    parser.add_argument(
-        "--sample-size",
-        type=int,
-        help="number of images to randomly sample for training",
-        default=None,
-    )
     parser.add_argument("--agl-weight", type=float, help="agl loss weight", default=1)
-    parser.add_argument("--mag-weight", type=float, help="mag loss weight", default=2)
+    parser.add_argument("--mag-weight", type=float, help="mag loss weight", default=1)
     parser.add_argument(
-        "--angle-weight", type=float, help="angle loss weight", default=10
+        "--angle-weight", type=float, help="angle loss weight", default=50
     )
     parser.add_argument(
-        "--scale-weight", type=float, help="scale loss weight", default=10
+        "--scale-weight", type=float, help="scale loss weight", default=50
     )
     parser.add_argument(
         "--rgb-suffix", type=str, help="suffix for rgb files", default="j2k"
@@ -156,12 +131,13 @@ if __name__ == "__main__":
     parser.add_argument("--prefetch", action="store_true", help="Use prefetching")
     parser.add_argument("--pl-dir", type=str, default=None, help="path to lmdb")
     parser.add_argument("--city", type=str, default=None, help="city name")
-    parser.add_argument("--use-city", action="store_true", help="Use city ohe in decoder")
+    parser.add_argument(
+        "--use-city", action="store_true", help="Use city ohe in decoder"
+    )
 
     args = parser.parse_args()
     print(args)
 
-    # os.environ["CUDA_VISIBLE_DEVICES"] = args.gpus
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"

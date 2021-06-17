@@ -30,10 +30,11 @@ class UnetVFLOW(nn.Module):
         )
 
         if use_city:
-            enc_out_channels = self.encoder.out_channels[:-1] + (self.encoder.out_channels[-1] + 5, )  # city ohe dim
+            enc_out_channels = self.encoder.out_channels[:-1] + (
+                self.encoder.out_channels[-1] + 5,
+            )  # city ohe dim
         else:
             enc_out_channels = self.encoder.out_channels
-
 
         self.decoder = UnetDecoder(
             encoder_channels=enc_out_channels,

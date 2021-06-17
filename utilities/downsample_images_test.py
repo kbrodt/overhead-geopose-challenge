@@ -1,12 +1,11 @@
 import argparse
 from pathlib import Path
 
-import cv2
 from misc_utils import load_image, save_image
 from tqdm import tqdm
 
 
-def downsample_images(args, downsample=2):
+def downsample_images(args):
     indir = Path(args.indir)
     outdir = Path(args.outdir)
 
@@ -22,14 +21,6 @@ def downsample_images(args, downsample=2):
         )  # args.unit used to convert units on load
         assert len(rgb.shape) == 3
 
-        # downsample
-        if downsample > 1:
-            target_shape = (
-                int(rgb.shape[0] / downsample),
-                int(rgb.shape[1] / downsample),
-            )
-            rgb = cv2.resize(rgb, target_shape)
-
         # save
         # units are NOT converted back here, so are in m
         #        save_image((outdir / rgb_path.name), rgb)
@@ -42,7 +33,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--indir", type=str, help="input directory", default=None)
     parser.add_argument("--outdir", type=str, help="output directory", default=None)
-    parser.add_argument("--downsample", type=int, help="downsample image", default=1)
     parser.add_argument(
         "--nan-placeholder", type=int, help="placeholder value for nans", default=65535
     )
@@ -57,4 +47,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
     print(args)
-    downsample_images(args, args.downsample)
+    downsample_images(args)

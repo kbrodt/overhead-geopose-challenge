@@ -10,7 +10,6 @@ from pathlib import Path
 
 import albumentations as A
 import apex
-import cv2
 import lmdb
 import numpy as np
 import pandas as pd
@@ -176,16 +175,6 @@ class Dataset(BaseDataset):
             scale = np.float32(scale)
 
             xydir = np.array([xdir, ydir])
-
-        if self.is_test and self.args.downsample > 1:
-            image = cv2.resize(
-                image,
-                (
-                    int(image.shape[0] / self.args.downsample),
-                    int(image.shape[1] / self.args.downsample),
-                ),
-                interpolation=cv2.INTER_NEAREST,
-            )
 
         image = image.astype("uint8")
         if (not self.is_test) and (not self.is_val):
@@ -1045,7 +1034,7 @@ def train(args):
                 else:
                     valid_logs[name] = [sum(valid_logs[name])]
 
-        if args.local_rank == 0 and ((i + 1) % args.save_period) == 0:
+        if args.local_rank == 0:
             saver(
                 os.path.join(args.checkpoint_dir, "./model_last.pth"),
             )
@@ -1053,7 +1042,7 @@ def train(args):
         if scheduler is not None:
             scheduler.step()
 
-        if args.local_rank == 0 and args.val_period > 0:
+        if args.local_rank == 0:
             rms_per_city = {tpe: {} for tpe in IMAGES + ERRORS}
             r2_per_city = {tpe: {} for tpe in IMAGES}
             score_per_city = {}
@@ -1324,9 +1313,7 @@ def test(args):
                 # vflow pred
                 angle = np.arctan2(xydir_pred[batch_ind][0], xydir_pred[batch_ind][1])
                 vflow_data = {
-                    "scale": np.float64(
-                        scale_pred[batch_ind] * args.downsample
-                    ),  # upsample
+                    "scale": np.float64(scale_pred[batch_ind]),  # upsample
                     "angle": np.float64(angle),
                 }
 
@@ -1334,15 +1321,6 @@ def test(args):
                 curr_agl_pred = agl_pred[batch_ind, 0, :, :]
                 curr_agl_pred[curr_agl_pred < 0] = 0
                 agl_resized = curr_agl_pred
-                if args.downsample > 1:
-                    agl_resized = cv2.resize(
-                        curr_agl_pred,
-                        (
-                            curr_agl_pred.shape[0] * args.downsample,  # upsample
-                            curr_agl_pred.shape[1] * args.downsample,  # upsample
-                        ),
-                        interpolation=cv2.INTER_NEAREST,
-                    )
 
                 # save
                 rgb_path = predictions_dir / Path(rgb_paths[batch_ind]).name

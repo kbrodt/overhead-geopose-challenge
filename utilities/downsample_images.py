@@ -4,7 +4,6 @@ import multiprocessing
 import pickle
 from pathlib import Path
 
-import cv2
 import lmdb
 from misc_utils import load_image, load_vflow, save_image
 from tqdm import tqdm
@@ -25,16 +24,6 @@ def load(rgb_path):
     _, _, _, vflow_data = load_vflow(
         vflow_path, agl, args
     )  # arg.unit used to convert units on load
-
-    # downsample
-    if args.downsample > 1:
-        target_shape = (
-            int(rgb.shape[0] / args.downsample),
-            int(rgb.shape[1] / args.downsample),
-        )
-        rgb = cv2.resize(rgb, target_shape)
-        agl = cv2.resize(agl, target_shape, interpolation=cv2.INTER_NEAREST)
-        vflow_data["scale"] /= args.downsample
 
     return (rgb, agl, vflow_data), (rgb_path, agl_path, vflow_path)
 
@@ -118,7 +107,6 @@ if __name__ == "__main__":
     parser.add_argument("--indir", type=str, help="input directory", default=None)
     parser.add_argument("--outdir", type=str, help="output directory", default=None)
     parser.add_argument("--lmdb", type=str, help="output directory", default=None)
-    parser.add_argument("--downsample", type=int, help="downsample image", default=1)
     parser.add_argument(
         "--nan-placeholder", type=int, help="placeholder value for nans", default=65535
     )
