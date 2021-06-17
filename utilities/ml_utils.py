@@ -1101,27 +1101,32 @@ def train(args):
 
 
 def test(args):
+    if args.distributed:
+        init_dist(args)
 
     torch.backends.cudnn.benchmark = True
 
-    if args.model_path is None:
-        model_paths = glob(os.path.join(args.checkpoint_dir, "*.pth"))
-        nums = [int(path.split("_")[-1].replace(".pth", "")) for path in model_paths]
-        idx = np.argsort(nums)[::-1]
-        model_path = model_paths[idx[0]]
-    else:
-        model_path = args.model_path
-
     model = build_model(args)
+    model = model.cuda()
+
+    model_path = args.load
     checkpoint = torch.load(model_path)
+    print(checkpoint["epoch"], checkpoint["best_score"])
     new_state_dict = OrderedDict()
     for k, v in checkpoint["state_dict"].items():
         name = k[7:] if k.startswith("module") else k
         new_state_dict[name] = v
 
     model.load_state_dict(new_state_dict)
-    model.to("cuda")
     model.eval()
+
+    if args.distributed:
+        # By default, apex.parallel.DistributedDataParallel overlaps communication with
+        # computation in the backward pass.
+        # model = DDP(model)
+        # delay_allreduce delays all communication to the end of the backward pass.
+        # model = apex.parallel.convert_syncbn_model(model)
+        model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
 
     df = pd.read_csv(args.test_path_df)
     metadata = pd.read_csv(Path(args.test_path_df).with_name("metadata.csv"))
@@ -1133,28 +1138,47 @@ def test(args):
     # if 'efficientnet' in args.backbone:
     #     model.encoder.set_swish(memory_efficient=False)
 
-    with torch.no_grad():
-        # model = torch.jit.trace(model, torch.rand(2, 3, 512, 512).cuda())
+    # model = torch.jit.trace(model, torch.rand(2, 3, 512, 512).cuda())
 
-        if args.pl_dir is not None:
-            test_dataset = DatasetPL(
-                rgb_dir=args.test_sub_dir, pred_dir=args.pl_dir, args=args
-            )
-        else:
-            test_dataset = Dataset(
-                df, args=args, is_val=True, cities=cities, is_test=True
-            )
-
-        args.num_workers = min(max(args.num_workers, args.batch_size), 16)
-        test_loader = DataLoader(
-            test_dataset,
-            batch_size=args.batch_size,
-            shuffle=False,
-            num_workers=args.num_workers,
+    if args.pl_dir is not None:
+        test_dataset = DatasetPL(
+            rgb_dir=args.test_sub_dir, pred_dir=args.pl_dir, args=args
         )
-        predictions_dir = Path(args.predictions_dir)
-        for images, rgb_paths in tqdm(test_loader, mininterval=2):
+    else:
+        test_dataset = Dataset(
+            df, args=args, is_val=True, cities=cities, is_test=True
+        )
 
+    test_sampler = None
+    if args.distributed:
+        test_sampler = torch.utils.data.distributed.DistributedSampler(
+            test_dataset,
+            shuffle=False,
+        )
+
+    args.num_workers = min(max(args.num_workers, args.batch_size), 16)
+    test_loader = DataLoader(
+        test_dataset,
+        batch_size=args.batch_size,
+        shuffle=False,
+        num_workers=args.num_workers,
+        sampler=test_sampler,
+    )
+
+    scaler = torch.cuda.amp.GradScaler()
+    if checkpoint["scaler"] is not None:
+        scaler.load_state_dict(checkpoint["scaler"])
+
+    predictions_dir = Path(args.predictions_dir)
+
+    if args.local_rank == 0:
+        iterator = tqdm(
+            total=len(test_loader),
+            mininterval=2,
+        )
+
+    with torch.no_grad():
+        for images, rgb_paths in test_loader:
             images_h = []
             if args.pl_dir is not None:
                 images, *images_h = images
@@ -1167,9 +1191,11 @@ def test(args):
             images = images.to("cuda", non_blocking=True)
 
             if args.use_city:
-                pred = model((images, city, gsd))
+                with torch.cuda.amp.autocast():
+                    pred = model((images, city, gsd))
             else:
-                pred = model(images)
+                with torch.cuda.amp.autocast():
+                    pred = model(images)
 
             pred = list(pred)
             # print(pred[0])
@@ -1189,9 +1215,11 @@ def test(args):
 
             if args.tta > 1:  # vertical flip
                 if args.use_city:
-                    pred_tta = model((torch.flip(images, dims=[-1]), city, gsd))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model((torch.flip(images, dims=[-1]), city, gsd))
                 else:
-                    pred_tta = model(torch.flip(images, dims=[-1]))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(torch.flip(images, dims=[-1]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 0] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
@@ -1202,9 +1230,11 @@ def test(args):
 
             if args.tta > 2:  # horizontal flip
                 if args.use_city:
-                    pred_tta = model((torch.flip(images, dims=[-2]), city, gsd))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model((torch.flip(images, dims=[-2]), city, gsd))
                 else:
-                    pred_tta = model(torch.flip(images, dims=[-2]))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(torch.flip(images, dims=[-2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 1] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
@@ -1215,9 +1245,11 @@ def test(args):
 
             if args.tta > 3:  # vertical+horizontal flip
                 if args.use_city:
-                    pred_tta = model((torch.flip(images, dims=[-1, -2]), city, gsd))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model((torch.flip(images, dims=[-1, -2]), city, gsd))
                 else:
-                    pred_tta = model(torch.flip(images, dims=[-1, -2]))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(torch.flip(images, dims=[-1, -2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
@@ -1230,9 +1262,11 @@ def test(args):
                 images_rot90 = torch.rot90(images, k=1, dims=[-2, -1])
 
                 if args.use_city:
-                    pred_tta = model((images_rot90, city, gsd))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model((images_rot90, city, gsd))
                 else:
-                    pred_tta = model(images_rot90)
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(images_rot90)
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta = torch.stack(
                     [-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1
@@ -1245,9 +1279,11 @@ def test(args):
 
                 # vertical flip
                 if args.use_city:
-                    pred_tta = model((torch.flip(images_rot90, dims=[-1]), city, gsd))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model((torch.flip(images_rot90, dims=[-1]), city, gsd))
                 else:
-                    pred_tta = model(torch.flip(images_rot90, dims=[-1]))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(torch.flip(images_rot90, dims=[-1]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 0] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
@@ -1262,9 +1298,11 @@ def test(args):
 
                 # horizontal flip
                 if args.use_city:
-                    pred_tta = model((torch.flip(images_rot90, dims=[-2]), city, gsd))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model((torch.flip(images_rot90, dims=[-2]), city, gsd))
                 else:
-                    pred_tta = model(torch.flip(images_rot90, dims=[-2]))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(torch.flip(images_rot90, dims=[-2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 1] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
@@ -1279,11 +1317,13 @@ def test(args):
 
                 # vertical+horizontal flip
                 if args.use_city:
-                    pred_tta = model(
-                        (torch.flip(images_rot90, dims=[-1, -2]), city, gsd)
-                    )
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(
+                            (torch.flip(images_rot90, dims=[-1, -2]), city, gsd)
+                        )
                 else:
-                    pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
+                    with torch.cuda.amp.autocast():
+                        pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
@@ -1299,6 +1339,8 @@ def test(args):
             pred[0] /= args.tta
             pred[1] /= args.tta
             pred[3] /= args.tta
+
+            torch.cuda.synchronize()
 
             numpy_preds = []
             for i in range(len(pred)):
@@ -1334,9 +1376,15 @@ def test(args):
                 json.dump(vflow_data, vflow_path.open("w"))
                 save_image(agl_path, agl_resized)  # save_image assumes units of meters
 
+            if args.local_rank == 0:
+                iterator.update()
+
     # creates new dir predictions_dir_con
-    if args.convert_predictions_to_cm_and_compress:
-        convert_and_compress_prediction_dir(predictions_dir=predictions_dir)
+    if args.local_rank == 0:
+        iterator.close()
+
+        if args.convert_predictions_to_cm_and_compress:
+            convert_and_compress_prediction_dir(predictions_dir=predictions_dir)
 
 
 def build_model(args):

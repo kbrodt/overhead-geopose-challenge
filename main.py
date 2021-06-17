@@ -20,12 +20,6 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint-dir", type=str, default="./checkpoints")
     parser.add_argument("--predictions-dir", type=str, default="./predictions")
     parser.add_argument(
-        "--model-path",
-        type=str,
-        help="Default is most recent in checkpoint dir",
-        default=None,
-    )
-    parser.add_argument(
         "--dataset-dir", type=str, help="dataset directory", default="./dataset"
     )
     parser.add_argument(
