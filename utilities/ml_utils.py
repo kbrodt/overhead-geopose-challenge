@@ -36,7 +36,6 @@ from utilities.misc_utils import (
 )
 from utilities.unet_vflow import UnetVFLOW
 
-RNG = np.random.RandomState(4321)
 
 p = 0.5
 crop_fn = A.RandomCrop(1024, 1024)
@@ -83,14 +82,12 @@ class Dataset(BaseDataset):
         self,
         df,
         args,
-        rng=RNG,
         is_val=False,
         cities=None,
         is_test=False,
     ):
         self.is_test = is_test
         self.is_val = is_val
-        self.rng = rng
         dataset_dir = Path(args.dataset_dir)
         rgb_paths = df.rgb.apply(
             lambda x: (dataset_dir / x).with_suffix(f".{args.rgb_suffix}")
@@ -202,26 +199,6 @@ class Dataset(BaseDataset):
 
     def __len__(self):
         return len(self.paths_list)
-
-    @staticmethod
-    def fast_collate(batch):
-        image, xydir, agl, mag, scale = zip(*batch)
-
-        image, xydir, agl, mag, scale = map(
-            lambda x: torch.tensor(x), (image, xydir, agl, mag, scale)
-        )
-
-        return image, xydir, agl, mag, scale
-
-
-#         return torch.stack(x), torch.stack(y)
-
-#         targets = torch.tensor([b[1] for b in batch], dtype=torch.int64)
-#         assert len(targets) == batch_size
-#         tensor = torch.zeros((batch_size, *batch[0][0].shape), dtype=torch.uint8)
-#         for i in range(batch_size):
-#             tensor[i] += torch.from_numpy(batch[i][0])
-#         return tensor, targets
 
 
 class DatasetPL(BaseDataset):
