@@ -1109,16 +1109,18 @@ def test(args):
     model = build_model(args)
     model = model.cuda()
 
-    model_path = args.load
-    checkpoint = torch.load(model_path)
+    checkpoint = torch.load(
+        args.load,
+        map_location=lambda storage, loc: storage.cuda(args.gpu),
+    )
     print(checkpoint["epoch"], checkpoint["best_score"])
+
     new_state_dict = OrderedDict()
     for k, v in checkpoint["state_dict"].items():
         name = k[7:] if k.startswith("module") else k
         new_state_dict[name] = v
 
     model.load_state_dict(new_state_dict)
-    model.eval()
 
     if args.distributed:
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
@@ -1165,10 +1167,6 @@ def test(args):
         sampler=test_sampler,
     )
 
-    scaler = torch.cuda.amp.GradScaler()
-    if checkpoint["scaler"] is not None:
-        scaler.load_state_dict(checkpoint["scaler"])
-
     predictions_dir = Path(args.predictions_dir)
 
     if args.local_rank == 0:
@@ -1177,6 +1175,7 @@ def test(args):
             mininterval=2,
         )
 
+    model.eval()
     with torch.no_grad():
         for images, rgb_paths in test_loader:
             images_h = []
@@ -1191,20 +1190,16 @@ def test(args):
             images = images.to("cuda", non_blocking=True)
 
             if args.use_city:
-                with torch.cuda.amp.autocast():
-                    pred = model((images, city, gsd))
+                pred = model((images, city, gsd))
             else:
-                with torch.cuda.amp.autocast():
-                    pred = model(images)
+                pred = model(images)
 
             pred = list(pred)
-            # print(pred[0])
 
             for imgs in images_h[-1:]:
                 imgs = imgs.to("cuda", non_blocking=True)
                 features = model.encoder(imgs)
                 xydir = model.xydir_head(features[-1])
-                # print(xydir)
                 pred[0] = xydir
 
             # print(pred[0])
@@ -1215,11 +1210,9 @@ def test(args):
 
             if args.tta > 1:  # vertical flip
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model((torch.flip(images, dims=[-1]), city, gsd))
+                    pred_tta = model((torch.flip(images, dims=[-1]), city, gsd))
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(torch.flip(images, dims=[-1]))
+                    pred_tta = model(torch.flip(images, dims=[-1]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 0] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
@@ -1230,11 +1223,9 @@ def test(args):
 
             if args.tta > 2:  # horizontal flip
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model((torch.flip(images, dims=[-2]), city, gsd))
+                    pred_tta = model((torch.flip(images, dims=[-2]), city, gsd))
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(torch.flip(images, dims=[-2]))
+                    pred_tta = model(torch.flip(images, dims=[-2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 1] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
@@ -1245,11 +1236,9 @@ def test(args):
 
             if args.tta > 3:  # vertical+horizontal flip
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model((torch.flip(images, dims=[-1, -2]), city, gsd))
+                    pred_tta = model((torch.flip(images, dims=[-1, -2]), city, gsd))
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(torch.flip(images, dims=[-1, -2]))
+                    pred_tta = model(torch.flip(images, dims=[-1, -2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
@@ -1262,11 +1251,9 @@ def test(args):
                 images_rot90 = torch.rot90(images, k=1, dims=[-2, -1])
 
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model((images_rot90, city, gsd))
+                    pred_tta = model((images_rot90, city, gsd))
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(images_rot90)
+                    pred_tta = model(images_rot90)
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta = torch.stack(
                     [-xydir_pred_tta[:, 1], xydir_pred_tta[:, 0]], dim=1
@@ -1279,11 +1266,9 @@ def test(args):
 
                 # vertical flip
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model((torch.flip(images_rot90, dims=[-1]), city, gsd))
+                    pred_tta = model((torch.flip(images_rot90, dims=[-1]), city, gsd))
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(torch.flip(images_rot90, dims=[-1]))
+                    pred_tta = model(torch.flip(images_rot90, dims=[-1]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 0] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
@@ -1298,11 +1283,9 @@ def test(args):
 
                 # horizontal flip
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model((torch.flip(images_rot90, dims=[-2]), city, gsd))
+                    pred_tta = model((torch.flip(images_rot90, dims=[-2]), city, gsd))
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(torch.flip(images_rot90, dims=[-2]))
+                    pred_tta = model(torch.flip(images_rot90, dims=[-2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta[:, 1] *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
@@ -1317,13 +1300,11 @@ def test(args):
 
                 # vertical+horizontal flip
                 if args.use_city:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(
-                            (torch.flip(images_rot90, dims=[-1, -2]), city, gsd)
-                        )
+                    pred_tta = model(
+                        (torch.flip(images_rot90, dims=[-1, -2]), city, gsd)
+                    )
                 else:
-                    with torch.cuda.amp.autocast():
-                        pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
+                    pred_tta = model(torch.flip(images_rot90, dims=[-1, -2]))
                 xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                 xydir_pred_tta *= -1
                 agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
