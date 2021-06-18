@@ -3,8 +3,6 @@ import numpy as np
 
 from utilities.invert_flow import invert_flow
 
-RNG = np.random.RandomState(1234)
-
 
 def augment_vflow(
     image,
@@ -19,7 +17,6 @@ def augment_vflow(
     flip_prob=0.5,
     scale_prob=0.5,
     agl_prob=0.5,
-    rng=RNG,
     # max_agl=None,
     max_building_agl=200.0,
     max_factor=2.0,
@@ -27,38 +24,40 @@ def augment_vflow(
 ):
     # increase heights
     is_nan = np.isnan(mag).any() or np.isnan(agl).any()
-    if not is_nan and rng.uniform(0, 1) < agl_prob:
+    if not is_nan and np.random.random() < agl_prob:
         max_agl = np.max(agl)  # if max_agl is None else max_agl
         if max_agl > 0:
             max_scale_agl = min(max_factor, (max_building_agl / max_agl))
-            scale_height = rng.uniform(1.0, max(1.0, max_scale_agl))
+            scale_height = np.random.uniform(1.0, max(1.0, max_scale_agl))
             image, mag, agl = warp_agl(image, mag, angle, agl, scale_height, max_factor)
     # rotate90
-    if rng.uniform(0, 1) < rotate90_prob:
-        rotate_angle = rng.choice([90, 180, 270])
+    if np.random.random() < rotate90_prob:
+        rotate_angle = np.random.choice([90, 180, 270])
         xdir, ydir = rotate_xydir(xdir, ydir, rotate_angle)
         image, mag, agl = rotate_image(image, mag, agl, rotate_angle)
     # x flip
-    if rng.uniform(0, 1) < flip_prob:
+    if np.random.random() < flip_prob:
         image, mag, agl = flip(image, mag, agl, dim="x")
         xdir *= -1
     # y flip
-    if rng.uniform(0, 1) < flip_prob:
+    if np.random.random() < flip_prob:
         image, mag, agl = flip(image, mag, agl, dim="y")
         ydir *= -1
     # rotate
-    if rng.uniform(0, 1) < rotate_prob:
-        rotate_angle = rng.randint(0, 359)
+    if np.random.random() < rotate_prob:
+        rotate_angle = np.random.randint(0, 359)
         xdir, ydir = rotate_xydir(xdir, ydir, rotate_angle)
         image, mag, agl = rotate_image(image, mag, agl, rotate_angle)
     # rescale
-    if rng.uniform(0, 1) < scale_prob:
-        r = rng.random()
+    if np.random.random() < scale_prob:
+        r = np.random.random()
         factor = 1.0 - 0.3 * r
-        if rng.uniform(0, 1) < 0.5:
+        if np.random.random() < 0.5:
             factor = 1.0 + 0.3 * r
 
-        image, mag, agl, scale, gsd = rescale_vflow(image, mag, agl, scale, factor, gsd=gsd)
+        image, mag, agl, scale, gsd = rescale_vflow(
+            image, mag, agl, scale, factor, gsd=gsd
+        )
     return image, mag, xdir, ydir, agl, scale, gsd
 
 

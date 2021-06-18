@@ -880,6 +880,14 @@ def train(args):
             shuffle=args.city is None,
         )
 
+    def worker_init_fn(worker_id):
+        seed = (
+            np.random.get_state()[1][0]
+            + torch.distributed.get_world_size() * worker_id
+            + args.local_rank
+        )
+        np.random.seed(seed)
+
     args.num_workers = min(args.batch_size, 16)
     train_loader = DataLoader(
         train_dataset,
@@ -891,6 +899,7 @@ def train(args):
         pin_memory=False,
         persistent_workers=True,
         drop_last=True,
+        worker_init_fn=worker_init_fn,
     )
     val_batch_size = max(args.batch_size // 4, 1)
     val_loader = DataLoader(
@@ -1129,9 +1138,7 @@ def test(args):
             rgb_dir=args.test_sub_dir, pred_dir=args.pl_dir, args=args
         )
     else:
-        test_dataset = Dataset(
-            df, args=args, is_val=True, cities=cities, is_test=True
-        )
+        test_dataset = Dataset(df, args=args, is_val=True, cities=cities, is_test=True)
 
     test_sampler = None
     if args.distributed:
@@ -1327,7 +1334,9 @@ def test(args):
                 # agl pred
                 curr_agl_pred = agl_pred[batch_ind, 0, :, :]
                 # curr_agl_pred[curr_agl_pred < 0] = 0
-                curr_agl_pred = np.clip(curr_agl_pred, 0.0, MAX_HEIGTS[rgb_path.stem.split("_")[0]])
+                curr_agl_pred = np.clip(
+                    curr_agl_pred, 0.0, MAX_HEIGTS[rgb_path.stem.split("_")[0]]
+                )
                 agl_resized = curr_agl_pred
 
                 # save
