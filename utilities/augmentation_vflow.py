@@ -23,6 +23,7 @@ def augment_vflow(
     # max_agl=None,
     max_building_agl=200.0,
     max_factor=2.0,
+    gsd=None,
 ):
     # increase heights
     is_nan = np.isnan(mag).any() or np.isnan(agl).any()
@@ -52,9 +53,13 @@ def augment_vflow(
         image, mag, agl = rotate_image(image, mag, agl, rotate_angle)
     # rescale
     if rng.uniform(0, 1) < scale_prob:
-        factor = 1.0 - 0.3 * rng.random()
-        image, mag, agl, scale = rescale_vflow(image, mag, agl, scale, factor)
-    return image, mag, xdir, ydir, agl, scale
+        r = rng.random()
+        factor = 1.0 - 0.3 * r
+        if rng.uniform(0, 1) < 0.5:
+            factor = 1.0 + 0.3 * r
+
+        image, mag, agl, scale, gsd = rescale_vflow(image, mag, agl, scale, factor, gsd=gsd)
+    return image, mag, xdir, ydir, agl, scale, gsd
 
 
 def flip(image, mag, agl, dim):
@@ -147,13 +152,16 @@ def rescale(image, factor, fill_value=0):
     return rescaled_image
 
 
-def rescale_vflow(rgb, mag, agl, scale, factor):
+def rescale_vflow(rgb, mag, agl, scale, factor, gsd=None):
     rescaled_rgb = rescale(rgb, factor, fill_value=0)
     rescaled_agl = rescale(agl, factor, fill_value=np.nan)
     rescaled_mag = rescale(mag, factor, fill_value=np.nan)
     rescaled_mag[np.isfinite(rescaled_mag)] /= factor
     scale /= factor
-    return rescaled_rgb, rescaled_mag, rescaled_agl, scale
+    if gsd is not None:
+        gsd = gsd / factor
+
+    return rescaled_rgb, rescaled_mag, rescaled_agl, scale, gsd
 
 
 def warp_flow(img, flow):

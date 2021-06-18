@@ -125,6 +125,14 @@ class Dataset(BaseDataset):
         self.cities = cities
 
     def __getitem__(self, i):
+        gsd = None
+        if self.cities is not None:
+            city_str = self.city[i]
+            city = np.zeros((len(self.cities), 1, 1), dtype="float32")
+            city[self.cities.index(city_str)] = 1
+
+            gsd = np.zeros((1, 1, 1), dtype="float32")
+            gsd[0] = self.gsd[i]
 
         if self.is_test:
             rgb_path = self.paths_list[i]
@@ -150,7 +158,7 @@ class Dataset(BaseDataset):
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
             if (not self.is_val) and self.args.augmentation:
-                image, mag, xdir, ydir, agl, scale = augment_vflow(
+                image, mag, xdir, ydir, agl, scale, gsd = augment_vflow(
                     image,
                     mag,
                     xdir,
@@ -163,6 +171,7 @@ class Dataset(BaseDataset):
                     flip_prob=0.5,
                     scale_prob=0.5,
                     agl_prob=0.5,
+                    gsd=gsd,
                     # max_agl=max_agl,
                 )
             xdir = np.float32(xdir)
@@ -183,13 +192,6 @@ class Dataset(BaseDataset):
         image = np.transpose(image, (2, 0, 1))
 
         if self.cities is not None:
-            city_str = self.city[i]
-            city = np.zeros((len(self.cities), 1, 1), dtype="float32")
-            city[self.cities.index(city_str)] = 1
-
-            gsd = np.zeros((1, 1, 1), dtype="float32")
-            gsd[0] = self.gsd[i]
-
             image = image, city, gsd
 
         if self.is_test:
