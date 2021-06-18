@@ -1114,6 +1114,9 @@ def test(args):
     CITIES = ["ARG", "ATL", "JAX", "OMA"]
     cities = CITIES if args.use_city else None
 
+    MAX_HEIGTS = {city: 200.0 for city in CITIES}
+    MAX_HEIGTS["ARG"] = 100.0
+
     # if 'efficientnet' in args.backbone:
     #     model.encoder.set_swish(memory_efficient=False)
 
@@ -1317,13 +1320,15 @@ def test(args):
                     "angle": np.float64(angle),
                 }
 
+                rgb_path = predictions_dir / Path(rgb_paths[batch_ind]).name
+
                 # agl pred
                 curr_agl_pred = agl_pred[batch_ind, 0, :, :]
-                curr_agl_pred[curr_agl_pred < 0] = 0
+                # curr_agl_pred[curr_agl_pred < 0] = 0
+                curr_agl_pred = np.clip(curr_agl_pred, 0.0, MAX_HEIGTS[rgb_path.stem.split("_")[0]])
                 agl_resized = curr_agl_pred
 
                 # save
-                rgb_path = predictions_dir / Path(rgb_paths[batch_ind]).name
                 agl_path = rgb_path.with_name(
                     rgb_path.name.replace("_RGB", "_AGL")
                 ).with_suffix(".tif")
