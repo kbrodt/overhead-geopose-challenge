@@ -36,6 +36,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--backbone", type=str, default="sene154")
     parser.add_argument("--encoder-weights", type=str, default="imagenet")
+    parser.add_argument("--optim", type=str, default="fusedadam", help="optimizer name")
     parser.add_argument("--learning-rate", type=float, default=0.0001)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
     parser.add_argument("--T-max", type=int, default=5)
@@ -128,6 +129,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--use-city", action="store_true", help="Use city ohe in decoder"
     )
+    parser.add_argument("--fp16", action="store_true", help="fp16 training")
+    parser.add_argument("--use-jit", action="store_true", help="use jit model")
 
     args = parser.parse_args()
     print(args)

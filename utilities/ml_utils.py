@@ -582,7 +582,7 @@ class TrainEpoch(Epoch):
         # if self.channels_last:
         #     x = x.contiguous(memory_format=torch.channels_last)
 
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad()  # set_to_none=True)
 
         if self.scaler is not None:
             with torch.cuda.amp.autocast():
@@ -827,12 +827,7 @@ def train(args):
     else:
         parameters = model.parameters()
 
-    optimizer = apex.optimizers.FusedAdam(  # torch.optim.Adam(
-        parameters,
-        adam_w_mode=True,
-        lr=args.learning_rate,
-        weight_decay=args.weight_decay,
-    )
+    optimizer = build_optimizer(parameters, args)
 
     if args.resume:
         optimizer.load_state_dict(checkpoint["opt_state_dict"])
@@ -928,7 +923,8 @@ def train(args):
     )
 
     scaler = None
-    scaler = torch.cuda.amp.GradScaler()
+    if args.fp16:
+        scaler = torch.cuda.amp.GradScaler()
 
     dense_loss = NoNaNMSE()
     angle_loss = MSELoss()
@@ -1080,9 +1076,30 @@ def train(args):
 
             if score > best_score:
                 best_score = score
-                saver(
-                    os.path.join(args.checkpoint_dir, "./model_best.pth"),
-                )
+                saver(os.path.join(args.checkpoint_dir, "./model_best.pth"))
+
+                model.eval()
+                if "efficientnet" in args.backbone:
+                    model.encoder.set_swish(memory_efficient=False)
+
+                inp = torch.rand(2, 3, 512, 512).cuda()
+                if args.use_city:
+                    inp = (
+                        (
+                            inp,
+                            torch.zeros(2, 4, 1, 1).cuda(),
+                            torch.rand(2, 1, 1, 1).cuda(),
+                        ),
+                    )
+
+                with torch.no_grad():
+                    traced_model = torch.jit.trace(model, inp)
+
+                traced_model.save(os.path.join(args.checkpoint_dir, "./model_best.pt"))
+                del traced_model
+
+                if "efficientnet" in args.backbone:
+                    model.encoder.set_swish(memory_efficient=True)
 
     if args.local_rank == 0:
         summary_writer.close()
@@ -1094,21 +1111,24 @@ def test(args):
 
     torch.backends.cudnn.benchmark = True
 
-    model = build_model(args)
-    model = model.cuda()
+    if args.use_jit:
+        model = torch.jit.load(args.load).cuda().eval()
+    else:
+        model = build_model(args)
+        model = model.cuda()
 
-    checkpoint = torch.load(
-        args.load,
-        map_location=lambda storage, loc: storage.cuda(args.gpu),
-    )
-    print(checkpoint["epoch"], checkpoint["best_score"])
+        checkpoint = torch.load(
+            args.load,
+            map_location=lambda storage, loc: storage.cuda(args.gpu),
+        )
+        print(checkpoint["epoch"], checkpoint["best_score"])
 
-    new_state_dict = OrderedDict()
-    for k, v in checkpoint["state_dict"].items():
-        name = k[7:] if k.startswith("module") else k
-        new_state_dict[name] = v
+        new_state_dict = OrderedDict()
+        for k, v in checkpoint["state_dict"].items():
+            name = k[7:] if k.startswith("module") else k
+            new_state_dict[name] = v
 
-    model.load_state_dict(new_state_dict)
+        model.load_state_dict(new_state_dict)
 
     if args.distributed:
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
@@ -1165,6 +1185,28 @@ def test(args):
         )
 
     model.eval()
+    if not args.use_jit and args.local_rank == 0:
+        if "efficientnet" in args.backbone:
+            model.encoder.set_swish(memory_efficient=False)
+
+        inp = torch.rand(2, 3, 512, 512).cuda()
+        if args.use_city:
+            inp = (
+                (
+                    inp,
+                    torch.zeros(2, 4, 1, 1).cuda(),
+                    torch.rand(2, 1, 1, 1).cuda(),
+                ),
+            )
+
+        with torch.no_grad():
+            traced_model = torch.jit.trace(model, inp)
+
+        traced_model.save(Path(args.load).with_suffix(".pt"))
+
+        if "efficientnet" in args.backbone:
+            model.encoder.set_swish(memory_efficient=True)
+
     with torch.no_grad():
         for images, rgb_paths in test_loader:
             images_h = []
@@ -1366,3 +1408,29 @@ def build_model(args):
         args.backbone, encoder_weights=args.encoder_weights, use_city=args.use_city
     )
     return model
+
+
+def build_optimizer(parameters, args):
+    if args.optim.lower() == 'fusedadam':
+        optimizer = apex.optimizers.FusedAdam(
+            parameters,
+            adam_w_mode=True,
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+        )
+    elif args.optim.lower() == 'fusedsgd':
+        optimizer = apex.optimizers.FusedSGD(
+            parameters,
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+        )
+    elif args.optim.lower() == 'sgd':
+        optimizer = torch.optim.SGD(
+            parameters,
+            lr=args.learning_rate,
+            weight_decay=args.weight_decay,
+        )
+    else:
+        raise NotImplementedError(f"not yet implemented {args.optim}")
+
+    return optimizer
