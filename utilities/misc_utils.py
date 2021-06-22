@@ -163,7 +163,7 @@ def convert_and_compress_prediction_dir(
     for agl_path, json_path in tqdm(zip(agl_paths, json_paths), total=len(agl_paths)):
         # convert and compress agl tif
         imarray = np.array(Image.open(agl_path))
-        imarray = cv2.medianBlur(imarray, 5)
+        # imarray = cv2.medianBlur(imarray, 5)
         imarray = np.round(imarray * conversion_factor).astype(agl_dtype)
         new_image = Image.fromarray(imarray)
         new_image_path = converted_predictions_dir / agl_path.name
