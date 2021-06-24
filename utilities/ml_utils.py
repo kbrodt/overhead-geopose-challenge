@@ -17,6 +17,7 @@ import torch
 import torch.distributed
 from segmentation_models_pytorch.utils.meter import AverageValueMeter
 from sklearn.model_selection import StratifiedKFold
+from torch.utils.data import ConcatDataset
 from torch.utils.data import DataLoader
 from torch.utils.data import Dataset as BaseDataset
 from torch.utils.tensorboard import SummaryWriter
@@ -271,6 +272,93 @@ class DatasetPL(BaseDataset):
         images_aug = [np.transpose(image, (2, 0, 1)) for image in images_aug]
 
         return images_aug, str(rgb_path)
+
+    def __len__(self):
+        return len(self.paths_list)
+
+
+class DatasetPseudoLabel(BaseDataset):
+    def __init__(
+        self,
+        df,
+        args,
+        cities=None,
+    ):
+        rgb_paths = df.rgb.apply(lambda x: Path(args.test_rgb_path) / x).tolist()
+        agl_paths = df.agl.apply(lambda x: Path(args.pl_dir) / x).tolist()
+        vflow_paths = df.json.apply(lambda x: Path(args.pl_dir) / x).tolist()
+
+        self.gsd = df.gsd.tolist()
+        self.city = df.city.tolist()
+
+        self.paths_list = [
+            (rgb_paths[i], vflow_paths[i], agl_paths[i]) for i in range(len(rgb_paths))
+        ]
+
+        self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
+            args.backbone, args.encoder_weights
+        )
+
+        self.args = args
+        self.cities = cities
+
+    def __getitem__(self, i):
+        gsd = None
+        if self.cities is not None:
+            city_str = self.city[i]
+            city = np.zeros((len(self.cities), 1, 1), dtype="float32")
+            city[self.cities.index(city_str)] = 1
+
+            gsd = np.zeros((1, 1, 1), dtype="float32")
+            gsd[0] = self.gsd[i]
+
+            rgb_path, vflow_path, agl_path = self.paths_list[i]
+            image = load_image(rgb_path, self.args, use_cv=True)
+            agl = load_image(agl_path, self.args)
+
+            data = crop_fn(image=image, mask=agl)
+            image = data["image"]
+            agl = data["mask"]
+
+            mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
+            scale = vflow_data["scale"]
+            if self.args.augmentation:
+                image, mag, xdir, ydir, agl, scale, gsd = augment_vflow(
+                    image,
+                    mag,
+                    xdir,
+                    ydir,
+                    vflow_data["angle"],
+                    vflow_data["scale"],
+                    agl=agl,
+                    rotate90_prob=0.5,
+                    rotate_prob=0.3,
+                    flip_prob=0.5,
+                    scale_prob=0.5,
+                    agl_prob=0.5,
+                    gsd=gsd,
+                    # max_agl=max_agl,
+                )
+            xdir = np.float32(xdir)
+            ydir = np.float32(ydir)
+            mag = mag.astype("float32")
+            agl = agl.astype("float32")
+            scale = np.float32(scale)
+
+            xydir = np.array([xdir, ydir])
+
+        image = image.astype("uint8")
+        data = albu_train(image=image, masks=[mag, agl])
+        image = data["image"]
+        mag, agl = data["masks"]
+
+        image = self.preprocessing_fn(image).astype("float32")
+        image = np.transpose(image, (2, 0, 1))
+
+        if self.cities is not None:
+            image = image, city, gsd
+
+        return image, xydir, agl, mag, scale
 
     def __len__(self):
         return len(self.paths_list)
@@ -854,6 +942,14 @@ def train(args):
 
     cities = CITIES if args.use_city else None
     train_dataset = Dataset(train_df, args=args, is_val=False, cities=cities)
+
+    if args.pl_dir is not None:
+        test_df = pd.read_csv(args.test_path_df)
+        test_df["agl"] = test_df.rgb.str.replace("RGB.j2k", "AGL.tif")
+        test_df["json"] = test_df.rgb.str.replace("RGB.j2k", "VFLOW.json")
+        test_df = pd.merge(test_df, metadata, on="id")
+        test_dataset = DatasetPseudoLabel(test_df, args, cities=cities)
+        train_dataset = ConcatDataset([train_dataset, test_dataset])
 
     if args.city is not None:
         CITIES = [args.city]
