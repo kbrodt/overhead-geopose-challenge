@@ -150,7 +150,7 @@ class Dataset(BaseDataset):
                 agl = load_image(agl_path, self.args)
 
             # max_agl = np.nanmax(agl)
-            if (not self.is_test) and (not self.is_val):
+            if self.args.augmentation and (not self.is_test) and (not self.is_val):
                 data = crop_fn(image=image, mask=agl)
                 image = data["image"]
                 agl = data["mask"]
@@ -316,9 +316,10 @@ class DatasetPseudoLabel(BaseDataset):
             image = load_image(rgb_path, self.args, use_cv=True)
             agl = load_image(agl_path, self.args)
 
-            data = crop_fn(image=image, mask=agl)
-            image = data["image"]
-            agl = data["mask"]
+            if self.args.augmentation:
+                data = crop_fn(image=image, mask=agl)
+                image = data["image"]
+                agl = data["mask"]
 
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
