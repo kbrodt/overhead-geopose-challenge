@@ -420,6 +420,7 @@ class Epoch:
         verbose=True,
         local_rank=0,
         channels_last=False,
+        to_log=False,
     ):
         self.args = args
         self.model = model
@@ -431,6 +432,7 @@ class Epoch:
         self.device = device
         self.local_rank = local_rank
         self.channels_last = channels_last
+        self.to_log = to_log
 
         self.loss_names = ["combined", "agl", "mag", "angle", "scale"]
 
@@ -508,13 +510,7 @@ class Epoch:
                 )
                 y = [xydir, agl, mag, scale]
 
-                (
-                    loss,
-                    xydir_pred,
-                    agl_pred,
-                    mag_pred,
-                    scale_pred,
-                ) = self.batch_update(image, y)
+                loss, *_ = self.batch_update(image, y)
 
                 loss_logs = {}
 
@@ -646,6 +642,7 @@ class TrainEpoch(Epoch):
         verbose=True,
         local_rank=0,
         channels_last=False,
+        to_log=False,
     ):
         super().__init__(
             model=model,
@@ -658,6 +655,7 @@ class TrainEpoch(Epoch):
             verbose=verbose,
             local_rank=local_rank,
             channels_last=channels_last,
+            to_log=to_log,
         )
         self.optimizer = optimizer
         self.scaler = scaler
@@ -677,6 +675,10 @@ class TrainEpoch(Epoch):
                 scale_pred = torch.unsqueeze(scale_pred, 1)
 
                 xydir, agl, mag, scale = y
+                if self.to_log:
+                    agl = torch.log1p(agl)
+                    mag = torch.log1p(mag)
+
                 loss_agl = self.dense_loss(agl_pred, agl)
                 loss_mag = self.dense_loss(mag_pred, mag)
                 loss_angle = self.angle_loss(xydir_pred, xydir)
@@ -695,6 +697,10 @@ class TrainEpoch(Epoch):
             scale_pred = torch.unsqueeze(scale_pred, 1)
 
             xydir, agl, mag, scale = y
+            if self.to_log:
+                agl = torch.log1p(agl)
+                mag = torch.log1p(mag)
+
             loss_agl = self.dense_loss(agl_pred, agl)
             loss_mag = self.dense_loss(mag_pred, mag)
             loss_angle = self.angle_loss(xydir_pred, xydir)
@@ -732,7 +738,7 @@ class TrainEpoch(Epoch):
 
 class ValidEpoch(Epoch):
     def __init__(
-        self, model, args, device="cpu", verbose=True, local_rank=0, channels_last=False
+        self, model, args, device="cpu", verbose=True, local_rank=0, channels_last=False, to_log=False,
     ):
         super().__init__(
             model=model,
@@ -742,6 +748,7 @@ class ValidEpoch(Epoch):
             verbose=verbose,
             local_rank=local_rank,
             channels_last=channels_last,
+            to_log=to_log,
         )
 
     def on_epoch_start(self):
@@ -753,6 +760,9 @@ class ValidEpoch(Epoch):
 
         with torch.no_grad():
             xydir_pred, agl_pred, mag_pred, scale_pred = self.model.forward(x)
+            if self.to_log:
+                agl_pred = torch.expm1(agl_pred)
+                mag_pred = torch.expm1(mag_pred)
 
             scale_pred = torch.unsqueeze(scale_pred, 1)
 
@@ -1013,7 +1023,7 @@ def train(args):
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer,
         T_0=5 * args.T_max,
-        T_mult=1,  # 1.41421,
+        T_mult=2,  # 1.41421,
         eta_min=max(args.learning_rate * 1e-2, 1e-6),
     )
 
@@ -1036,6 +1046,7 @@ def train(args):
         device="cuda",
         local_rank=args.local_rank,
         channels_last=args.channels_last,
+        to_log=args.to_log,
     )
 
     val_epoch = ValidEpoch(
@@ -1044,6 +1055,7 @@ def train(args):
         device="cuda",
         local_rank=args.local_rank,
         channels_last=args.channels_last,
+        to_log=args.to_log,
     )
 
     best_score = 0
@@ -1304,6 +1316,9 @@ def test(args):
                     pred = model(images)
 
                 pred = list(pred)
+                if args.to_log:
+                    pred[1] = torch.expm1(pred[1])
+
                 preds[0][model_idx * args.tta, :bs] = pred[0]
                 preds[1][model_idx * args.tta, :bs] = pred[1]
                 preds[2][model_idx * args.tta, :bs] = pred[3]
@@ -1316,6 +1331,8 @@ def test(args):
                     xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                     xydir_pred_tta[:, 0] *= -1
                     agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1])
+                    if args.to_log:
+                        agl_pred_tta = torch.expm1(agl_pred_tta)
 
                     preds[0][model_idx * args.tta + 1, :bs] = xydir_pred_tta
                     preds[1][model_idx * args.tta + 1, :bs] = agl_pred_tta
@@ -1329,6 +1346,8 @@ def test(args):
                     xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                     xydir_pred_tta[:, 1] *= -1
                     agl_pred_tta = torch.flip(agl_pred_tta, dims=[-2])
+                    if args.to_log:
+                        agl_pred_tta = torch.expm1(agl_pred_tta)
 
                     preds[0][model_idx * args.tta + 2, :bs] = xydir_pred_tta
                     preds[1][model_idx * args.tta + 2, :bs] = agl_pred_tta
@@ -1342,6 +1361,8 @@ def test(args):
                     xydir_pred_tta, agl_pred_tta, _, scale_pred_tta = pred_tta
                     xydir_pred_tta *= -1
                     agl_pred_tta = torch.flip(agl_pred_tta, dims=[-1, -2])
+                    if args.to_log:
+                        agl_pred_tta = torch.expm1(agl_pred_tta)
 
                     preds[0][model_idx * args.tta + 3, :bs] = xydir_pred_tta
                     preds[1][model_idx * args.tta + 3, :bs] = agl_pred_tta
@@ -1482,7 +1503,7 @@ def test(args):
 
 def build_model(args):
     model = UnetVFLOW(
-        args.backbone, encoder_weights=args.encoder_weights, use_city=args.use_city
+        args.backbone, encoder_weights=args.encoder_weights, use_city=args.use_city, to_log=args.to_log,
     )
     return model
 

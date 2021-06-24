@@ -19,6 +19,7 @@ class UnetVFLOW(nn.Module):
         in_channels: int = 3,
         attention_type=None,  # "scse"
         use_city=False,
+        to_log=False,
     ):
         super().__init__()
 
@@ -66,6 +67,7 @@ class UnetVFLOW(nn.Module):
 
         self.name = "u-{}".format(encoder_name)
         self.initialize()
+        self.to_log = to_log
 
     def initialize(self):
         init.initialize_decoder(self.decoder)
@@ -96,7 +98,10 @@ class UnetVFLOW(nn.Module):
         xydir = self.xydir_head(features[-1])
         height = self.height_head(decoder_output)
         mag = self.mag_head(decoder_output)
-        scale = self.scale_head(mag, height)
+        if self.to_log:
+            scale = self.scale_head(torch.expm1(mag), torch.expm1(height))
+        else:
+            scale = self.scale_head(mag, height)
 
         if scale.ndim == 0:
             scale = torch.unsqueeze(scale, axis=0)
