@@ -38,10 +38,10 @@ from utilities.unet_vflow import UnetVFLOW
 
 
 p = 0.5
-crop_fn = A.RandomCrop(1024, 1024)
+crop_fn = A.RandomCrop(512, 512)
 albu_train = A.Compose(
     [
-        A.RandomCrop(512, 512),
+        # A.RandomCrop(512, 512),
         A.CoarseDropout(max_holes=32, max_height=32, max_width=32, p=p),
         A.OneOf(
             [
@@ -150,7 +150,7 @@ class Dataset(BaseDataset):
                 agl = load_image(agl_path, self.args)
 
             # max_agl = np.nanmax(agl)
-            if self.args.augmentation and (not self.is_test) and (not self.is_val):
+            if (not self.is_test) and (not self.is_val):
                 data = crop_fn(image=image, mask=agl)
                 image = data["image"]
                 agl = data["mask"]
@@ -316,10 +316,9 @@ class DatasetPseudoLabel(BaseDataset):
             image = load_image(rgb_path, self.args, use_cv=True)
             agl = load_image(agl_path, self.args)
 
-            if self.args.augmentation:
-                data = crop_fn(image=image, mask=agl)
-                image = data["image"]
-                agl = data["mask"]
+            data = crop_fn(image=image, mask=agl)
+            image = data["image"]
+            agl = data["mask"]
 
             mag, xdir, ydir, vflow_data = load_vflow(vflow_path, agl, self.args)
             scale = vflow_data["scale"]
@@ -1018,15 +1017,15 @@ def train(args):
         val_loader = PrefetchLoader(val_loader)
 
     scheduler = None
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-    #     optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
-    # )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer,
-        T_0=5 * args.T_max,
-        T_mult=2,  # 1.41421,
-        eta_min=max(args.learning_rate * 1e-2, 1e-6),
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+        optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
     )
+    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+    #     optimizer,
+    #     T_0=5 * args.T_max,
+    #     T_mult=2,  # 1.41421,
+    #     eta_min=max(args.learning_rate * 1e-2, 1e-6),
+    # )
 
     scaler = None
     if args.fp16:
