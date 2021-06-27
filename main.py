@@ -108,6 +108,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--distributed", action="store_true", help="distributed training"
     )
+    parser.add_argument("--syncbn", action="store_true", help="sync batchnorm")
     parser.add_argument(
         "--deterministic", action="store_true", help="deterministic training"
     )

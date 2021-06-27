@@ -933,7 +933,9 @@ def train(args):
         # computation in the backward pass.
         # model = DDP(model)
         # delay_allreduce delays all communication to the end of the backward pass.
-        # model = apex.parallel.convert_syncbn_model(model)
+        if args.syncbn:
+            model = apex.parallel.convert_syncbn_model(model)
+
         model = apex.parallel.DistributedDataParallel(model, delay_allreduce=True)
 
     df = pd.read_csv(args.train_path_df)
