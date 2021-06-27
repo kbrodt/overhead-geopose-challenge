@@ -812,14 +812,13 @@ class L1SmoothLoss(smp.utils.base.Loss):
 
 
 def train_dev_split(geopose, args):
-    geopose["area"] = geopose.rgb.str.split("_").str[0]
     geopose["fold"] = None
 
     n_col = len(geopose.columns) - 1
     skf = StratifiedKFold(
         n_splits=args.n_folds, shuffle=True, random_state=args.random_state
     )
-    for fold, (_, dev_index) in enumerate(skf.split(geopose, geopose.area)):
+    for fold, (_, dev_index) in enumerate(skf.split(geopose, geopose.city)):
         geopose.iloc[dev_index, n_col] = fold
 
     train, dev = (
@@ -943,12 +942,15 @@ def train(args):
 
     train_df, dev_df = train_dev_split(df, args)
 
-    if args.city is not None:
-        train_df = train_df[train_df.city.isin([args.city])].reset_index(drop=True)
-        dev_df = dev_df[dev_df.city.isin([args.city])].reset_index(drop=True)
-
     CITIES = ["ARG", "ATL", "JAX", "OMA"]
     assert len(CITIES) == torch.distributed.get_world_size()
+
+    if args.city is not None:
+        CITIES = [args.city]
+        train_df = train_df[train_df.city.isin(CITIES)].reset_index(drop=True)
+        dev_df = dev_df[dev_df.city.isin(CITIES)].reset_index(drop=True)
+    else:
+        dev_df = dev_df[dev_df.city.isin([CITIES[args.local_rank]])].reset_index(drop=True)
 
     cities = CITIES if args.use_city else None
     train_dataset = Dataset(train_df, args=args, is_val=False, cities=cities)
@@ -960,11 +962,6 @@ def train(args):
         test_df = pd.merge(test_df, metadata, on="id")
         test_dataset = DatasetPseudoLabel(test_df, args, cities=cities)
         train_dataset = ConcatDataset([train_dataset, test_dataset])
-
-    if args.city is not None:
-        CITIES = [args.city]
-    else:
-        dev_df = dev_df[dev_df.area == CITIES[args.local_rank]].reset_index(drop=True)
 
     val_dataset = Dataset(dev_df, args=args, is_val=True, cities=cities)
 
@@ -1268,6 +1265,8 @@ def test(args):
         shuffle=False,
         num_workers=args.num_workers,
         sampler=test_sampler,
+        pin_memory=False,
+        persistent_workers=True,
     )
 
     predictions_dir = Path(args.predictions_dir)
