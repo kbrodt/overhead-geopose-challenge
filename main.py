@@ -42,7 +42,6 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", type=str, default="cosa", help="scheduler name")
     parser.add_argument("--T-max", type=int, default=5)
     parser.add_argument("--agl-weight", type=float, help="agl loss weight", default=1)
-    parser.add_argument("--mag-weight", type=float, help="mag loss weight", default=1)
     parser.add_argument(
         "--angle-weight", type=float, help="angle loss weight", default=50
     )

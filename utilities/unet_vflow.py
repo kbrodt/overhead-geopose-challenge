@@ -46,14 +46,9 @@ class UnetVFLOW(nn.Module):
             attention_type=attention_type,
         )
 
-        self.xydir_head = EncoderRegressionHead(
+        self.scale_xydir_head = EncoderRegressionHead(
             in_channels=self.encoder.out_channels[-1],
-            out_channels=2,
-        )
-
-        self.scale_head = EncoderRegressionHead(
-            in_channels=self.encoder.out_channels[-1],
-            out_channels=1,
+            out_channels=1 + 2,
         )
 
         self.height_head = nn.Conv2d(
@@ -69,9 +64,8 @@ class UnetVFLOW(nn.Module):
 
     def initialize(self):
         init.initialize_decoder(self.decoder)
-        init.initialize_head(self.xydir_head)
+        init.initialize_head(self.scale_xydir_head)
         init.initialize_head(self.height_head)
-        init.initialize_head(self.scale_head)
 
     def forward(self, x):
         use_city = isinstance(x, tuple)
@@ -79,8 +73,8 @@ class UnetVFLOW(nn.Module):
             x, city, gsd = x
 
         features = self.encoder(x)
-        xydir = self.xydir_head(features[-1])
-        scale = self.scale_head(features[-1])
+        scale_xydir = self.scale_xydir_head(features[-1])
+        scale, xydir = torch.split(scale_xydir, (1, 2), dim=1)
 
         if use_city:
             size = features[-1].size(2)
