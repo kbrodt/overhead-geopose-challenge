@@ -1232,7 +1232,12 @@ def test(args):
     df = pd.merge(df, metadata, on="id")
 
     CITIES = ["ARG", "ATL", "JAX", "OMA"]
-    cities = CITIES if args.use_city else None
+    if args.city is not None:
+        CITIES = [args.city]
+        df = df[df.city.isin(CITIES)].reset_index(drop=True)
+
+    cities = ["ARG", "ATL", "JAX", "OMA"] if args.use_city else None
+
 
     MAX_HEIGTS = {city: 200.0 for city in CITIES}
     MAX_HEIGTS["ARG"] = 100.0
