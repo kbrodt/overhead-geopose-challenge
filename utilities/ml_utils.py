@@ -954,7 +954,7 @@ def train(args):
     else:
         dev_df = dev_df[dev_df.city.isin([CITIES[args.local_rank]])].reset_index(drop=True)
 
-    cities = CITIES if args.use_city else None
+    cities = ["ARG", "ATL", "JAX", "OMA"] if args.use_city else None
     train_dataset = Dataset(train_df, args=args, is_val=False, cities=cities)
 
     if args.pl_dir is not None:
@@ -1015,16 +1015,7 @@ def train(args):
         train_loader = PrefetchLoader(train_loader)
         val_loader = PrefetchLoader(val_loader)
 
-    scheduler = None
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
-    )
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-    #     optimizer,
-    #     T_0=5 * args.T_max,
-    #     T_mult=2,  # 1.41421,
-    #     eta_min=max(args.learning_rate * 1e-2, 1e-6),
-    # )
+    scheduler = build_scheduler(optimizer, args)
 
     scaler = None
     if args.fp16:
@@ -1533,3 +1524,23 @@ def build_optimizer(parameters, args):
         raise NotImplementedError(f"not yet implemented {args.optim}")
 
     return optimizer
+
+
+def build_scheduler(optimizer, args):
+    scheduler = None
+
+    if args.scheduler.lower() == "cosa":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
+        )
+    elif args.scheduler.lower() == "cosawr":
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer,
+            T_0=5 * args.T_max,
+            T_mult=2,  # 1.41421,
+            eta_min=max(args.learning_rate * 1e-2, 1e-6),
+        )
+    else:
+        print("No scheduler")
+
+    return scheduler

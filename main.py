@@ -39,6 +39,7 @@ if __name__ == "__main__":
     parser.add_argument("--optim", type=str, default="fusedadam", help="optimizer name")
     parser.add_argument("--learning-rate", type=float, default=0.0001)
     parser.add_argument("--weight-decay", type=float, default=0.0005)
+    parser.add_argument("--scheduler", type=str, default="cosa", help="scheduler name")
     parser.add_argument("--T-max", type=int, default=5)
     parser.add_argument("--agl-weight", type=float, help="agl loss weight", default=1)
     parser.add_argument("--mag-weight", type=float, help="mag loss weight", default=1)
@@ -136,16 +137,21 @@ if __name__ == "__main__":
     parser.add_argument("--to-log", action="store_true", help="use log heights")
 
     args = parser.parse_args()
-    print(args)
+    if args.local_rank == 0:
+        print(args)
 
     os.environ["MKL_NUM_THREADS"] = "1"
     os.environ["NUMEXPR_NUM_THREADS"] = "1"
     os.environ["OMP_NUM_THREADS"] = "1"
 
     if args.train:
-        os.makedirs(args.checkpoint_dir, exist_ok=True)
+        if args.local_rank == 0:
+            os.makedirs(args.checkpoint_dir, exist_ok=True)
+
         train(args)
 
     if args.test:
-        os.makedirs(args.predictions_dir, exist_ok=True)
+        if args.local_rank == 0:
+            os.makedirs(args.predictions_dir, exist_ok=True)
+
         test(args)
