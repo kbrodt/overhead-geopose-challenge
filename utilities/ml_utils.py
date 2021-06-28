@@ -566,15 +566,15 @@ class Epoch:
 
                     vflow_pred = np.zeros_like(vflow)
                     vflow_pred[..., 0] = (
-                        mag_pred[batch_ind].squeeze() * xydir_pred[batch_ind, 0]
+                        agl_pred[batch_ind].squeeze() * xydir_pred[batch_ind, 0]
                     )
                     vflow_pred[..., 1] = (
-                        mag_pred[batch_ind].squeeze() * xydir_pred[batch_ind, 1]
+                        agl_pred[batch_ind].squeeze() * xydir_pred[batch_ind, 1]
                     )
+                    vflow_pred = scale_pred[batch_ind] * vflow_pred
 
                     count, error_sum, rms, data_sum, gt_sq_sum = get_r2_info(
-                        vflow,
-                        vflow_pred,
+                        vflow, vflow_pred,
                     )
                     vflow_count += count
                     vflow_error_sum += error_sum
