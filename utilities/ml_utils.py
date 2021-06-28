@@ -687,7 +687,7 @@ class TrainEpoch(Epoch):
 
                 loss_combined = (
                     self.args.agl_weight * loss_agl
-                    + self.args.mag_weight * loss_mag
+                    # + self.args.mag_weight * loss_mag
                     + self.args.angle_weight * loss_angle
                     + self.args.scale_weight * loss_scale
                 )
@@ -709,7 +709,7 @@ class TrainEpoch(Epoch):
 
             loss_combined = (
                 self.args.agl_weight * loss_agl
-                + self.args.mag_weight * loss_mag
+                # + self.args.mag_weight * loss_mag
                 + self.args.angle_weight * loss_angle
                 + self.args.scale_weight * loss_scale
             )

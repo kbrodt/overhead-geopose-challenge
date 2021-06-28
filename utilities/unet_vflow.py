@@ -47,23 +47,21 @@ class UnetVFLOW(nn.Module):
         )
 
         self.xydir_head = EncoderRegressionHead(
-            in_channels=enc_out_channels[-1],
+            in_channels=self.encoder.out_channels[-1],
             out_channels=2,
         )
 
-        self.height_head = RegressionHead(
+        self.scale_head = EncoderRegressionHead(
+            in_channels=self.encoder.out_channels[-1],
+            out_channels=1,
+        )
+
+        self.height_head = nn.Conv2d(
             in_channels=decoder_channels[-1],
             out_channels=1,
             kernel_size=3,
+            padding=1,
         )
-
-        self.mag_head = RegressionHead(
-            in_channels=decoder_channels[-1],
-            out_channels=1,
-            kernel_size=3,
-        )
-
-        self.scale_head = ScaleHead()
 
         self.name = "u-{}".format(encoder_name)
         self.initialize()
@@ -73,7 +71,6 @@ class UnetVFLOW(nn.Module):
         init.initialize_decoder(self.decoder)
         init.initialize_head(self.xydir_head)
         init.initialize_head(self.height_head)
-        init.initialize_head(self.mag_head)
         init.initialize_head(self.scale_head)
 
     def forward(self, x):
@@ -82,6 +79,9 @@ class UnetVFLOW(nn.Module):
             x, city, gsd = x
 
         features = self.encoder(x)
+        xydir = self.xydir_head(features[-1])
+        scale = self.scale_head(features[-1])
+
         if use_city:
             size = features[-1].size(2)
             features[-1] = torch.cat(
@@ -95,16 +95,10 @@ class UnetVFLOW(nn.Module):
 
         decoder_output = self.decoder(*features)
 
-        xydir = self.xydir_head(features[-1])
         height = self.height_head(decoder_output)
-        mag = self.mag_head(decoder_output)
-        if self.to_log:
-            scale = self.scale_head(torch.expm1(mag), torch.expm1(height))
-        else:
-            scale = self.scale_head(mag, height)
+        mag = scale.unsqueeze(2).unsqueeze(3) * height
 
-        if scale.ndim == 0:
-            scale = torch.unsqueeze(scale, axis=0)
+        scale = scale.squeeze(1)
 
         return xydir, height, mag, scale
 
@@ -118,51 +112,10 @@ class UnetVFLOW(nn.Module):
         return x
 
 
-class RegressionHead(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=3):
-        conv2d = nn.Conv2d(
-            in_channels, out_channels, kernel_size, padding=kernel_size // 2
-        )
-        identity = nn.Identity()
-        activation = Activation(None)
-        super().__init__(conv2d, identity, activation)
-
-
 class EncoderRegressionHead(nn.Sequential):
-    def __init__(self, in_channels, out_channels, kernel_size=3):
+    def __init__(self, in_channels, out_channels):
         pool = nn.AdaptiveAvgPool2d(1)
         flatten = Flatten()
         dropout = nn.Dropout(p=0.5, inplace=True)
-        linear = nn.Linear(in_channels, 2, bias=True)
+        linear = nn.Linear(in_channels, out_channels, bias=True)
         super().__init__(pool, flatten, dropout, linear)
-
-
-class ScaleHead(nn.Module):
-    def __init__(
-        self,
-    ):
-        super().__init__()
-        self.flatten = torch.flatten
-        self.dot = torch.dot
-
-    def forward(self, mag, height):
-        curr_mag = self.flatten(mag, start_dim=1)
-        curr_height = self.flatten(height, start_dim=1)
-        batch_size = curr_mag.shape[0]
-        length = curr_mag.shape[1]
-        denom = (
-            torch.squeeze(
-                torch.bmm(
-                    curr_height.view(batch_size, 1, length),
-                    curr_height.view(batch_size, length, 1),
-                )
-            )
-            + 0.01
-        )
-        pinv = curr_height / denom.view(batch_size, 1)
-        scale = torch.squeeze(
-            torch.bmm(
-                pinv.view(batch_size, 1, length), curr_mag.view(batch_size, length, 1)
-            )
-        )
-        return scale
