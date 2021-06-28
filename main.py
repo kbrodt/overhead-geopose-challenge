@@ -133,7 +133,6 @@ if __name__ == "__main__":
         "--use-city", action="store_true", help="Use city ohe in decoder"
     )
     parser.add_argument("--fp16", action="store_true", help="fp16 training")
-    parser.add_argument("--use-jit", action="store_true", help="use jit model")
     parser.add_argument("--to-log", action="store_true", help="use log heights")
 
     args = parser.parse_args()
