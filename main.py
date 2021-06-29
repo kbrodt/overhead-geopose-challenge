@@ -133,6 +133,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--fp16", action="store_true", help="fp16 training")
     parser.add_argument("--to-log", action="store_true", help="use log heights")
+    parser.add_argument("--albu", action="store_true", help="use log heights")
 
     args = parser.parse_args()
     if args.local_rank == 0:

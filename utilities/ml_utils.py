@@ -183,7 +183,7 @@ class Dataset(BaseDataset):
             xydir = np.array([xdir, ydir])
 
         image = image.astype("uint8")
-        if (not self.is_test) and (not self.is_val):
+        if self.args.albu and (not self.is_test) and (not self.is_val):
             data = albu_train(image=image, masks=[mag, agl])
             image = data["image"]
             mag, agl = data["masks"]
@@ -1082,7 +1082,7 @@ def train(args):
     for i in range(start_epoch, args.num_epochs):
         if args.distributed:
             train_sampler.set_epoch(i)
-            if val_sampler is None:
+            if val_sampler is not None:
                 val_sampler.set_epoch(i)
 
         desc = f"{i}/{args.num_epochs}"
