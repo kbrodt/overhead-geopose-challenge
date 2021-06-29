@@ -1082,7 +1082,7 @@ def train(args):
     for i in range(start_epoch, args.num_epochs):
         if args.distributed:
             train_sampler.set_epoch(i)
-            if val_sampler is not None:
+            if args.city is None:
                 val_sampler.set_epoch(i)
 
         desc = f"{i}/{args.num_epochs}"
