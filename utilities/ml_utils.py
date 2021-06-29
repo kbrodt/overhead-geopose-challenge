@@ -1208,13 +1208,12 @@ def test(args):
 
     torch.backends.cudnn.benchmark = True
 
-    # TODO: remove hardcod
-    use_cities = [True]  # [False, True]
-
     models = [
         torch.jit.load(p, map_location=torch.device(f"cuda:{args.gpu}")).eval()
-        for p in args.load.split(",")
+        for p in args.model_pt
     ]
+
+    assert len(models) == len(args.use_cities)
 
     if args.distributed:
         # By default, apex.parallel.DistributedDataParallel overlaps communication with
@@ -1306,7 +1305,7 @@ def test(args):
             bs = images.size(0)
 
             [pred.zero_() for pred in preds]
-            for model_idx, (use_city, model) in enumerate(zip(use_cities, models)):
+            for model_idx, (use_city, model) in enumerate(zip(args.use_cities, models)):
                 if use_city:
                     pred = model((images, city, gsd))
                 else:

@@ -3,6 +3,15 @@ import os
 
 from utilities.ml_utils import test, train
 
+
+def str2bool(v):
+    if v.lower().startswith("t"):
+        return True
+    elif v.lower().startswith("f"):
+        return False
+
+    raise argparse.ArgumentTypeError("Bool value expected")
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -42,6 +51,7 @@ if __name__ == "__main__":
     parser.add_argument("--scheduler", type=str, default="cosa", help="scheduler name")
     parser.add_argument("--T-max", type=int, default=5)
     parser.add_argument("--agl-weight", type=float, help="agl loss weight", default=1)
+    parser.add_argument("--mag-weight", type=float, help="mag loss weight", default=1)
     parser.add_argument(
         "--angle-weight", type=float, help="angle loss weight", default=50
     )
@@ -115,6 +125,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--load", type=str, default="", help="path to pretrained model weights"
     )
+    parser.add_argument('--model-pt', nargs="+", type=str)
+    parser.add_argument('--use-cities', nargs="+", type=str2bool)
     parser.add_argument(
         "--resume",
         action="store_true",
@@ -133,7 +145,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--fp16", action="store_true", help="fp16 training")
     parser.add_argument("--to-log", action="store_true", help="use log heights")
-    parser.add_argument("--albu", action="store_true", help="use log heights")
+    parser.add_argument("--albu", action="store_true", help="use albu augs")
 
     args = parser.parse_args()
     if args.local_rank == 0:
