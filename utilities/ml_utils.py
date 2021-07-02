@@ -1535,14 +1535,14 @@ def build_scheduler(optimizer, args):
 
     if args.scheduler.lower() == "cosa":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-6)
+            optimizer, T_max=args.T_max, eta_min=max(args.learning_rate * 1e-2, 1e-7)
         )
     elif args.scheduler.lower() == "cosawr":
         scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
             optimizer,
             T_0=5 * args.T_max,
             T_mult=2,  # 1.41421,
-            eta_min=max(args.learning_rate * 1e-2, 1e-6),
+            eta_min=max(args.learning_rate * 1e-2, 1e-7),
         )
     else:
         print("No scheduler")
