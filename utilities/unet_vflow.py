@@ -47,7 +47,7 @@ class UnetVFLOW(nn.Module):
         )
 
         self.scale_xydir_head = EncoderRegressionHead(
-            in_channels=self.encoder.out_channels[-1],
+            in_channels=enc_out_channels[-1],  # self.encoder.out_channels[-1],
             out_channels=1 + 2,
         )
 
@@ -73,9 +73,6 @@ class UnetVFLOW(nn.Module):
             x, city, gsd = x
 
         features = self.encoder(x)
-        scale_xydir = self.scale_xydir_head(features[-1])
-        scale, xydir = torch.split(scale_xydir, (1, 2), dim=1)
-
         if use_city:
             size = features[-1].size(2)
             features[-1] = torch.cat(
@@ -86,6 +83,9 @@ class UnetVFLOW(nn.Module):
                 ],
                 dim=1,
             )
+
+        scale_xydir = self.scale_xydir_head(features[-1])
+        scale, xydir = torch.split(scale_xydir, (1, 2), dim=1)
 
         decoder_output = self.decoder(*features)
 
