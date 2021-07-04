@@ -37,44 +37,50 @@ from utilities.misc_utils import (
 from utilities.unet_vflow import UnetVFLOW
 
 
-p = 0.5
-crop_fn = A.RandomCrop(512, 512)
-albu_train = A.Compose(
-    [
-        # A.RandomCrop(512, 512),
-        A.CoarseDropout(max_holes=32, max_height=32, max_width=32, p=p),
-        A.OneOf(
+def get_transforms(args, p=0.5):
+    crop_size = 1024 if args.augmentation else 512
+    crop_fn = A.RandomCrop(crop_size, crop_size)
+
+    albu_train = None
+    if args.albu:
+        albu_train = A.Compose(
+            args.augmentation * [A.RandomCrop(512, 512)] +
             [
-                A.Blur(p=1),
-                A.GlassBlur(p=1),
-                A.GaussianBlur(p=1),
-                A.MedianBlur(p=1),
-                A.MotionBlur(p=1),
-            ],
-            p=p,
-        ),
-        A.RandomBrightnessContrast(p=p),
-        A.OneOf(
-            [
-                A.RandomGamma(p=1),
-                A.ColorJitter(p=1),
-                A.RandomToneCurve(p=1),
-            ],
-            p=p,
-        ),
-        A.OneOf(
-            [
-                A.GaussNoise(p=1),
-                A.MultiplicativeNoise(p=1),
-            ],
-            p=p,
-        ),
-        A.FancyPCA(p=0.2),
-        A.RandomFog(p=0.2),
-        A.RandomShadow(p=0.2),
-        A.RandomSunFlare(src_radius=150, p=0.2),
-    ]
-)
+                A.CoarseDropout(max_holes=32, max_height=32, max_width=32, p=p),
+                A.OneOf(
+                    [
+                        A.Blur(p=1),
+                        A.GlassBlur(p=1),
+                        A.GaussianBlur(p=1),
+                        A.MedianBlur(p=1),
+                        A.MotionBlur(p=1),
+                    ],
+                    p=p,
+                ),
+                A.RandomBrightnessContrast(p=p),
+                A.OneOf(
+                    [
+                        A.RandomGamma(p=1),
+                        A.ColorJitter(p=1),
+                        A.RandomToneCurve(p=1),
+                    ],
+                    p=p,
+                ),
+                A.OneOf(
+                    [
+                        A.GaussNoise(p=1),
+                        A.MultiplicativeNoise(p=1),
+                    ],
+                    p=p,
+                ),
+                A.FancyPCA(p=0.2),
+                A.RandomFog(p=0.2),
+                A.RandomShadow(p=0.2),
+                A.RandomSunFlare(src_radius=150, p=0.2),
+            ]
+        )
+
+    return crop_fn, albu_train
 
 
 class Dataset(BaseDataset):
@@ -124,6 +130,10 @@ class Dataset(BaseDataset):
         self.args = args
         self.cities = cities
 
+        crop_fn, albu_train = get_transforms(self.args)
+        self.crop_fn = crop_fn
+        self.albu_train = albu_train
+
     def __getitem__(self, i):
         gsd = None
         if self.cities is not None:
@@ -151,7 +161,7 @@ class Dataset(BaseDataset):
 
             # max_agl = np.nanmax(agl)
             if (not self.is_test) and (not self.is_val):
-                data = crop_fn(image=image, mask=agl)
+                data = self.crop_fn(image=image, mask=agl)
                 image = data["image"]
                 agl = data["mask"]
 
@@ -184,7 +194,7 @@ class Dataset(BaseDataset):
 
         image = image.astype("uint8")
         if self.args.albu and (not self.is_test) and (not self.is_val):
-            data = albu_train(image=image, masks=[mag, agl])
+            data = self.albu_train(image=image, masks=[mag, agl])
             image = data["image"]
             mag, agl = data["masks"]
 
@@ -1260,10 +1270,10 @@ def test(args):
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=args.num_workers,
+        num_workers=0, #args.num_workers,
         sampler=test_sampler,
         pin_memory=False,
-        persistent_workers=True,
+        persistent_workers=False, # True,
     )
 
     predictions_dir = Path(args.predictions_dir)
