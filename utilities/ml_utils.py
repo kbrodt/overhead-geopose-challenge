@@ -887,6 +887,30 @@ def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
     ]
 
 
+def save_jit(model, args, model_name):
+    model.eval()
+    if "efficientnet" in args.backbone:
+        model.module.encoder.set_swish(memory_efficient=False)
+
+    inp = torch.rand(2, 3, 512, 512).cuda()
+    if args.use_city:
+        inp = (
+            (
+                inp,
+                torch.zeros(2, 4, 1, 1).cuda(),
+                torch.rand(2, 1, 1, 1).cuda(),
+            ),
+        )
+
+    with torch.no_grad():
+        traced_model = torch.jit.trace(model, inp)
+
+    traced_model.save(os.path.join(args.checkpoint_dir, model_name))
+
+    if "efficientnet" in args.backbone:
+        model.module.encoder.set_swish(memory_efficient=True)
+
+
 def train(args):
     if args.distributed:
         init_dist(args)
@@ -1129,6 +1153,7 @@ def train(args):
             saver(
                 os.path.join(args.checkpoint_dir, "./model_last.pth"),
             )
+            save_jit(model, args, "model_last.pt")
 
         if scheduler is not None:
             scheduler.step()
@@ -1185,28 +1210,8 @@ def train(args):
                 best_score = score
                 saver(os.path.join(args.checkpoint_dir, "./model_best.pth"))
 
-                model.eval()
-                if "efficientnet" in args.backbone:
-                    model.encoder.set_swish(memory_efficient=False)
+                save_jit(model, args, "model_best.pt")
 
-                inp = torch.rand(2, 3, 512, 512).cuda()
-                if args.use_city:
-                    inp = (
-                        (
-                            inp,
-                            torch.zeros(2, 4, 1, 1).cuda(),
-                            torch.rand(2, 1, 1, 1).cuda(),
-                        ),
-                    )
-
-                with torch.no_grad():
-                    traced_model = torch.jit.trace(model, inp)
-
-                traced_model.save(os.path.join(args.checkpoint_dir, "./model_best.pt"))
-                del traced_model
-
-                if "efficientnet" in args.backbone:
-                    model.encoder.set_swish(memory_efficient=True)
 
     if args.local_rank == 0:
         summary_writer.close()
