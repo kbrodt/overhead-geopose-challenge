@@ -43,6 +43,7 @@ if __name__ == "__main__":
         help="path to test df",
         default="geopose_test.csv",
     )
+    parser.add_argument("--model-type", type=str, default="unet")
     parser.add_argument("--backbone", type=str, default="sene154")
     parser.add_argument("--encoder-weights", type=str, default="imagenet")
     parser.add_argument("--optim", type=str, default="fusedadam", help="optimizer name")

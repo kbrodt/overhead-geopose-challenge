@@ -6,6 +6,9 @@ from segmentation_models_pytorch.base import initialization as init
 from segmentation_models_pytorch.base.modules import Activation, Flatten
 from segmentation_models_pytorch.encoders import get_encoder
 from segmentation_models_pytorch.unet.decoder import UnetDecoder
+from segmentation_models_pytorch.fpn.decoder import FPNDecoder
+from segmentation_models_pytorch.manet.decoder import MAnetDecoder
+from segmentation_models_pytorch.unetplusplus.decoder import UnetPlusPlusDecoder
 
 
 class UnetVFLOW(nn.Module):
@@ -20,6 +23,7 @@ class UnetVFLOW(nn.Module):
         attention_type=None,  # "scse"
         use_city=False,
         to_log=False,
+        model_type="unet",
     ):
         super().__init__()
 
@@ -37,25 +41,66 @@ class UnetVFLOW(nn.Module):
         else:
             enc_out_channels = self.encoder.out_channels
 
-        self.decoder = UnetDecoder(
-            encoder_channels=enc_out_channels,
-            decoder_channels=decoder_channels,
-            n_blocks=encoder_depth,
-            use_batchnorm=decoder_use_batchnorm,
-            center=True if encoder_name.startswith("vgg") else False,
-            attention_type=attention_type,
-        )
+        if model_type == "unet":
+            self.decoder = UnetDecoder(
+                encoder_channels=enc_out_channels,
+                decoder_channels=decoder_channels,
+                n_blocks=encoder_depth,
+                use_batchnorm=decoder_use_batchnorm,
+                center=True if encoder_name.startswith("vgg") else False,
+                attention_type=attention_type,
+            )
+        elif model_type == "fpn":
+            pyramid_channels = 256
+            segmentation_channels = 128
+            self.decoder = FPNDecoder(
+                encoder_channels=enc_out_channels,
+                encoder_depth=encoder_depth,
+                pyramid_channels=pyramid_channels,
+                segmentation_channels=segmentation_channels,
+                dropout=0.2,
+                merge_policy="add",
+            )
+        elif model_type == "manet":
+            decoder_pab_channels = 64
+            self.decoder = MAnetDecoder(
+                encoder_channels=enc_out_channels,
+                decoder_channels=decoder_channels,
+                n_blocks=encoder_depth,
+                use_batchnorm=decoder_use_batchnorm,
+                pab_channels=decoder_pab_channels
+            )
+        elif model_type == "unetpp":
+            self.decoder = UnetPlusPlusDecoder(
+                encoder_channels=enc_out_channels,
+                decoder_channels=decoder_channels,
+                n_blocks=encoder_depth,
+                use_batchnorm=decoder_use_batchnorm,
+                center=True if encoder_name.startswith("vgg") else False,
+                attention_type=attention_type,
+            )
+
+        if model_type == "fpn":
+            self.height_head = nn.Sequential(
+                nn.Conv2d(
+                    in_channels=self.decoder.out_channels,
+                    out_channels=1,
+                    kernel_size=1,
+                    padding=0,
+                ),
+                nn.UpsamplingBilinear2d(scale_factor=4),
+            )
+        else:
+            self.height_head = nn.Conv2d(
+                in_channels=decoder_channels[-1],
+                out_channels=1,
+                kernel_size=3,
+                padding=1,
+            )
 
         self.scale_xydir_head = EncoderRegressionHead(
             in_channels=enc_out_channels[-1],  # self.encoder.out_channels[-1],
             out_channels=1 + 2,
-        )
-
-        self.height_head = nn.Conv2d(
-            in_channels=decoder_channels[-1],
-            out_channels=1,
-            kernel_size=3,
-            padding=1,
         )
 
         self.name = "u-{}".format(encoder_name)

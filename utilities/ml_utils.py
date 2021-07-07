@@ -1515,6 +1515,7 @@ def test(args):
 def build_model(args):
     model = UnetVFLOW(
         args.backbone, encoder_weights=args.encoder_weights, use_city=args.use_city, to_log=args.to_log,
+        model_type=args.model_type,
     )
     return model
 
