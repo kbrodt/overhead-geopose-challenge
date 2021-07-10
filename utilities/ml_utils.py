@@ -782,43 +782,18 @@ class ValidEpoch(Epoch):
 class NoNaNMSE(smp.utils.base.Loss):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        pass
-
-    def forward(self, output, target):
-        diff = torch.squeeze(output) - target
-        not_nan = ~torch.isnan(diff)
-        loss = torch.mean(diff.masked_select(not_nan) ** 2)
-        return loss
-
-
-class AngleLoss(smp.utils.base.Loss):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        pass
-
-    def forward(self, output, target):
-        dot = (output * target).sum(-1)
-        loss = torch.mean((dot - 1) ** 2)
-
-        return loss
-
-
-class MSELoss(smp.utils.base.Loss):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
         self.mse = torch.nn.MSELoss()
 
     def forward(self, output, target):
-        return self.mse(output, target)
+        not_nan = ~torch.isnan(target)
 
+        output = torch.squeeze(output)
+        output = output.masked_select(not_nan)
+        target = target.masked_select(not_nan)
 
-class L1SmoothLoss(smp.utils.base.Loss):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.l1 = torch.nn.SmoothL1Loss()
+        loss = self.mse(output, target)
 
-    def forward(self, output, target):
-        return self.l1(output, target)
+        return loss
 
 
 def train_dev_split(geopose, args):
@@ -1056,8 +1031,8 @@ def train(args):
         scaler = torch.cuda.amp.GradScaler()
 
     dense_loss = NoNaNMSE()
-    angle_loss = MSELoss()
-    scale_loss = MSELoss()
+    angle_loss = torch.nn.MSELoss()
+    scale_loss = torch.nn.MSELoss()
 
     train_epoch = TrainEpoch(
         model,
