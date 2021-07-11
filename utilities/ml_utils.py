@@ -983,10 +983,11 @@ def train(args):
         # if args.city is not None:
         # If each rank has own city, so we need to use default sampler.
         # Otherwise distributed sampler devides dataset amount other workers.
-        val_sampler = torch.utils.data.distributed.DistributedSampler(
-            val_dataset,
-            shuffle=args.city is None,
-        )
+        if args.city is not None:
+            val_sampler = torch.utils.data.distributed.DistributedSampler(
+                val_dataset,
+                shuffle=args.city is None,
+            )
 
     def worker_init_fn(worker_id):
         seed = (
@@ -1091,7 +1092,7 @@ def train(args):
     for i in range(start_epoch, args.num_epochs):
         if args.distributed:
             train_sampler.set_epoch(i)
-            if args.city is None:
+            if args.city is None and val_sampler is not None:
                 val_sampler.set_epoch(i)
 
         desc = f"{i}/{args.num_epochs}"
