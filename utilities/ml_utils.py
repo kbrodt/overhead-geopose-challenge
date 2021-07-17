@@ -1228,7 +1228,6 @@ def test(args):
 
     cities = ["ARG", "ATL", "JAX", "OMA"] if args.use_city else None
 
-
     MAX_HEIGTS = {city: 200.0 for city in CITIES}
     MAX_HEIGTS["ARG"] = 100.0
 
@@ -1287,7 +1286,6 @@ def test(args):
             ),
         ]
         for images, rgb_paths in test_loader:
-            break
             if args.use_city:
                 images, city, gsd = images
                 city = city.to("cuda", non_blocking=True)
