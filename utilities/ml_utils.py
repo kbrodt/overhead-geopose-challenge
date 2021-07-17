@@ -1287,6 +1287,7 @@ def test(args):
             ),
         ]
         for images, rgb_paths in test_loader:
+            break
             if args.use_city:
                 images, city, gsd = images
                 city = city.to("cuda", non_blocking=True)
@@ -1484,8 +1485,12 @@ def test(args):
     if args.local_rank == 0:
         iterator.close()
 
-        if args.convert_predictions_to_cm_and_compress:
-            convert_and_compress_prediction_dir(predictions_dir=predictions_dir)
+    if args.convert_predictions_to_cm_and_compress:
+        convert_and_compress_prediction_dir(
+            predictions_dir=predictions_dir,
+            local_rank=args.local_rank,
+            n_ranks=torch.distributed.get_world_size(),
+        )
 
 
 def build_model(args):

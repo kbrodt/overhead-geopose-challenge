@@ -143,6 +143,8 @@ def convert_and_compress_prediction_dir(
     agl_dtype="uint16",
     compression_type="tiff_adobe_deflate",
     conversion_factors=UNITS_PER_METER_CONVERSION_FACTORS,
+    local_rank=0,
+    n_ranks=1,
 ):
     """Convert and compress prediction directory.
     Default parameters are consistent with DrivenData platform submission requirements.
@@ -155,7 +157,7 @@ def convert_and_compress_prediction_dir(
 
     conversion_factor = conversion_factors[to_unit]
 
-    agl_paths = list(predictions_dir.glob("*_AGL.tif"))
+    agl_paths = sorted(predictions_dir.glob("*_AGL.tif"))[local_rank::n_ranks]
     json_paths = list(
         pth.with_name(pth.name.replace("_AGL", "_VFLOW")).with_suffix(".json")
         for pth in agl_paths
