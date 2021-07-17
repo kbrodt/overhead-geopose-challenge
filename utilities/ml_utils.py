@@ -115,7 +115,7 @@ class Dataset(BaseDataset):
             ]
 
         self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
-            args.backbone, args.encoder_weights  # "imagenet"
+            "senet154", "imagenet"
         )
 
         if args.lmdb is not None:
@@ -242,7 +242,7 @@ class DatasetPL(BaseDataset):
         ]
 
         self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
-            args.backbone, args.encoder_weights  # "imagenet"
+            "senet154", "imagenet"
         )
 
         import copy
@@ -306,7 +306,7 @@ class DatasetPseudoLabel(BaseDataset):
         ]
 
         self.preprocessing_fn = smp.encoders.get_preprocessing_fn(
-            args.backbone, args.encoder_weights
+            "senet154", "imagenet"
         )
 
         self.args = args
@@ -864,7 +864,7 @@ def add_weight_decay(model, weight_decay=1e-5, skip_list=()):
 
 def save_jit(model, args, model_name):
     model.eval()
-    if "efficientnet" in args.backbone:
+    if args.backbone.startswith("efficientnet"):
         model.module.encoder.set_swish(memory_efficient=False)
 
     inp = torch.rand(2, 3, 512, 512).cuda()
@@ -882,7 +882,7 @@ def save_jit(model, args, model_name):
 
     traced_model.save(os.path.join(args.checkpoint_dir, model_name))
 
-    if "efficientnet" in args.backbone:
+    if args.backbone.startswith("efficientnet"):
         model.module.encoder.set_swish(memory_efficient=True)
 
 
@@ -1251,7 +1251,7 @@ def test(args):
         test_dataset,
         batch_size=args.batch_size,
         shuffle=False,
-        num_workers=0, #args.num_workers,
+        num_workers=2, #args.num_workers,
         sampler=test_sampler,
         pin_memory=False,
         persistent_workers=False, # True,
