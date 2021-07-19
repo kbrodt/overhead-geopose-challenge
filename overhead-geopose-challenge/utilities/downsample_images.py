@@ -53,32 +53,19 @@ def downsample_images(args):
     if rgb_paths == []:
         rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}"))  # original file names
 
-    # for rgb_path in tqdm(rgb_paths):
-    #     load_save(rgb_path, args)
-
     with multiprocessing.Pool(args.n_jobs) as p:
         _ = list(p.imap_unordered(func=load_save, iterable=tqdm(rgb_paths)))
 
 
 def save_to_db(args):
     indir = Path(args.indir)
-    outdir = Path(args.outdir)
 
-    outdir.mkdir(exist_ok=True)
     rgb_paths = list(indir.glob(f"*_RGB.{args.rgb_suffix}"))
     if rgb_paths == []:
         rgb_paths = list(indir.glob(f"*_RGB*.{args.rgb_suffix}"))  # original file names
 
-    # for rgb_path in tqdm(rgb_paths):
-    #     load_save(rgb_path, args)
-
     with multiprocessing.Pool(args.n_jobs) as p:
         items = list(p.imap_unordered(func=load, iterable=tqdm(rgb_paths)))
-
-    # items = []
-    # for rgb_path in tqdm(rgb_paths):
-    # items.append(load(rgb_path))
-    # break
 
     map_size = 0
     for item in items:
