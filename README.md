@@ -96,6 +96,7 @@ augmentations.
 - Finetuning per city
 - Heavy augmentations
 - Predict VFLOW and find xy axes via pseudo-inverse (like for scale)
+- [TGV denoising](https://github.com/DanonOfficial/TGVDenoising)
 
 ## Highlights
 
