@@ -42,9 +42,12 @@ It will take about 1 week on 4 GPUS.
 
 ### Inference
 
-You can download pretrained models [here]().
+You can download pretrained models
+[here](https://disk.yandex.com/d/YKBkCPWV1jaYrg) (extract via `unzip models.zip
+-d chkps_dist`).
 
 ```bash
+
 sh ./dist_test.sh
 ```
 
