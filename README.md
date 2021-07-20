@@ -4,11 +4,11 @@
 
 [4th
 place](https://www.drivendata.org/competitions/78/overhead-geopose-challenge/leaderboard/)
-out of 444 participants with $0.8731$ R2 coefficient of determination (top1 $0.924$).
+out of 444 participants with 0.8731 R2 coefficient of determination (top1 0.924).
 
 ## Prerequisites
 
-- At least 4 GPUs with 32GB VRAM (e.~g. Tesla V100)
+- 4 GPUs with 32GB VRAM (e.g. Tesla V100)
 - [NVIDIA apex](https://github.com/NVIDIA/apex)
 
 You can use 1 GPU but the training process will take almost 4 times longer.
@@ -38,7 +38,7 @@ preprocessing not loading all data into the memory).
 sh ./dist_train.sh
 ```
 
-It will take about 1 week on 4 GPUS.
+It will take about 1 week on 4 GPUs.
 
 ### Inference
 
@@ -47,32 +47,43 @@ You can download pretrained models
 -d chkps_dist`).
 
 ```bash
-
-sh ./dist_test.sh
+sh ./dist_test.sh  # adjust number of GPUs
+# sh ./test.sh     # or for single GPU
 ```
 
 ## Approach
 
-Train Unet-like model with various encoders (`efficientnet-b{6,7}` and
-`senet154`) to predict height fields with two additional heads in the
-bottleneck correspoding to scale and angle. At inference time average the
-predictions from all models taking full size `2048x2048` image. Note, that
-a single model also ranks at 4th place with $0.86$ `R2` coefficient of
+The method based on the solution provided by authors: Unet architecture with
+various encoders (`efficientnet-b{6,7}` and `senet154`) but simpler and
+straightforward: only one AGL head and two heads in the bottleneck for scale
+and angle. The model takes as input a random `512x512` crop of an aerial image,
+city as one hot encoding and ground sample distance (GSD) and outputs the above
+ground level (AGL), vector flow scale and angle. The model is trained with mean
+squared error (MSE) loss function for all targets (AGL, scale, angle) using
+AdamW optimizer with `1e-4` learning rate. Cosine annealing scheduler with
+period 25 is used. To reduce the memory consumption and to speedup the training
+model is trained in mixed precision regime with batch size 8. At inference time
+model takes a full size `2048x2048` aerial image and ouputs a full size AGL.
+
+First, the model is pretrained with heavy augmentations (like flips, rotations,
+color jittering, scaling, height augmentations etc.) for 525 epochs and then
+finetuned another 1025 epochs *without* any augmentations.
+
+*Remark*: It turns out that augmentations are damaging for model performance.
+Models without any augmentations train faster and has better performance
+according to validation splits.
+
+*Note*: A single model projected to be 4th place with 0.86 `R2` coefficient of
 determination.
-
-Pretrain models with heavy augmentations (like flips, rotations, color
-jittering, scaling, height augmentations etc.) for 525 epochs and finetune
-another 1025 epochs without any augmentations.
-
-*Remark*: Models without any augmentations train faster and better according to
-validation splits.
 
 ## Highlights
 
 - Unet-like models with `efficientnet` and `senet` encoders
-- Train on random crops with `512x512` size to speedup training
-- Batchsize $8$ (without syncronized batch norm to speedup training)
-- `AdamW` optimizer with `1e-4` learning rate
-- `CosineAnnealingLR` scheduler with period $25$ epochs
+- One head for AGL and two heads in the bottleneck for scale and angle
+- Train on random crops with `512x512` size
+- Additional features: city and GSD
 - Pretrain with heavy augmentations and finetune without any ones
-- Average the predictions from all models
+- Batchsize 8 
+- `AdamW` optimizer with `1e-4` learning rate
+- `CosineAnnealingLR` scheduler with period 25 epochs
+- Ensemble of models (averaged AGL, scale and angle)
