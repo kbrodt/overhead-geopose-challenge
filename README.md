@@ -9,6 +9,7 @@ out of 444 participants with 0.8731 R2 coefficient of determination (top1 0.924)
 ## Prerequisites
 
 - 4 GPUs with 32GB VRAM (e.g. Tesla V100)
+- [PyTorch](https://pytorch.org/)
 - [NVIDIA apex](https://github.com/NVIDIA/apex)
 
 You can use 1 GPU but the training process will take almost 4 times longer.

@@ -1,0 +1,10 @@
+albumentations
+Cython
+lmdb
+numpy
+osgeo
+pandas
+Pillow
+scikit_learn
+segmentation_models_pytorch
+tqdm
