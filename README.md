@@ -8,9 +8,10 @@ out of 444 participants with 0.8731 R2 coefficient of determination (top1 0.924)
 
 ## Prerequisites
 
-- 4 GPUs with 32GB VRAM (e.g. Tesla V100)
+- GNU/Linux
 - [PyTorch](https://pytorch.org/)
 - [NVIDIA apex](https://github.com/NVIDIA/apex)
+- 4 GPUs with 32GB VRAM (e.g. DGX station with Tesla V100)
 
 You can use 1 GPU but the training process will take almost 4 times longer.
 
@@ -64,14 +65,15 @@ squared error (MSE) loss function for all targets (AGL, scale, angle) using
 AdamW optimizer with `1e-4` learning rate. Cosine annealing scheduler with
 period 25 is used. To reduce the memory consumption and to speedup the training
 model is trained in mixed precision regime with batch size 8. At inference time
-model takes a full size `2048x2048` aerial image and ouputs a full size AGL.
+the model takes a full size `2048x2048` aerial image and outputs a full size
+AGL.
 
 First, the model is pretrained with heavy augmentations (like flips, rotations,
 color jittering, scaling, height augmentations etc.) for 525 epochs and then
 finetuned another 1025 epochs *without* any augmentations.
 
 *Remark*: It turns out that augmentations are damaging for model performance.
-Models without any augmentations train faster and has better performance
+Model train faster without any augmentations and has better performance
 according to validation splits.
 
 *Note*: A single model projected to be 4th place with 0.86 `R2` coefficient of
