@@ -21,7 +21,7 @@ SCHEDULER=cosa
 MODEL_TYPE=unet
 LMDB=./data/train.lmdb
 
-NUM_EPOCHS=2
+NUM_EPOCHS=525
 FOLD=1
 BACKBONE=efficientnet-b6
 CHECKPOINT=./chkps_dist/${BACKBONE}/${FOLD}_aug_${MODEL_TYPE}
@@ -96,7 +96,7 @@ for BACKBONE in efficientnet-b7 senet154; do
 done
 
 
-NUM_EPOCHS=2
+NUM_EPOCHS=1025
 FOLD=1
 BACKBONE=efficientnet-b6
 CHECKPOINT=./chkps_dist/${BACKBONE}/${FOLD}_aug_ft_${MODEL_TYPE}
