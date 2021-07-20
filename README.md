@@ -73,11 +73,29 @@ color jittering, scaling, height augmentations etc.) for 525 epochs and then
 finetuned another 1025 epochs *without* any augmentations.
 
 *Remark*: It turns out that augmentations are damaging for model performance.
-Model train faster without any augmentations and has better performance
+Model trains faster without any augmentations and has better performance
 according to validation splits.
 
 *Note*: A single model projected to be 4th place with 0.86 `R2` coefficient of
 determination.
+
+Typical learning curves of the model
+
+Competition metric
+![](./assets/val_score.png)
+
+Metrics per city (pink ATL, green JAX, grey OMA and cyan ARG)
+![](./assets/val_scores.png)
+
+We can see that metrics are improving drastically after turning off the
+augmentations.
+
+## Things didn't work
+
+- MSE loss on logarithmic AGL
+- Finetuning per city
+- Heavy augmentations
+- Predict VFLOW and find xy axes via pseudo-inverse (like for scale)
 
 ## Highlights
 

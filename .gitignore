@@ -1,7 +1,6 @@
 *.bak
 *.pyc
 *.tif
-*.png
 *.pdf
 *.json
 *.jpeg
