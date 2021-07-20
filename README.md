@@ -55,26 +55,26 @@ sh ./dist_test.sh  # adjust number of GPUs
 
 ## Approach
 
-The method based on the solution provided by authors: Unet architecture with
-various encoders (`efficientnet-b{6,7}` and `senet154`) but simpler and
-straightforward: only one AGL head and two heads in the bottleneck for scale
-and angle. The model takes as input a random `512x512` crop of an aerial image,
-city as one hot encoding and ground sample distance (GSD) and outputs the above
-ground level (AGL), vector flow scale and angle. The model is trained with mean
-squared error (MSE) loss function for all targets (AGL, scale, angle) using
-AdamW optimizer with `1e-4` learning rate. Cosine annealing scheduler with
-period 25 is used. To reduce the memory consumption and to speedup the training
-model is trained in mixed precision regime with batch size 8. At inference time
-the model takes a full size `2048x2048` aerial image and outputs a full size
-AGL.
+The method is based on the solution provided by the authors, but in a simpler
+and straightforward way. Using Unet architecture with various encoders
+(`efficientnet-b{6,7}` and `senet154`). The model has only one above ground
+level (AGL) head and two heads in the bottleneck for scale and angle. The model
+takes a random 512x512 crop of an aerial image, the city's one hot encoding and
+ground sample distance (GSD) as input. Then the model outputs the AGL, vector
+flow scale and angle. The model is trained with mean squared error (MSE) loss
+function for all targets (AGL, scale, angle) using AdamW optimizer with `1e-4`
+learning rate. Cosine annealing scheduler with period 25 is used. To reduce the
+memory consumption and to speedup the training process the model is trained in
+mixed precision regime with batch size 8. At inference time the model takes a
+full size `2048x2048` aerial image and outputs a full size AGL.
 
 First, the model is pretrained with heavy augmentations (like flips, rotations,
 color jittering, scaling, height augmentations etc.) for 525 epochs and then
 finetuned another 1025 epochs *without* any augmentations.
 
 *Remark*: It turns out that augmentations are damaging for model performance.
-Model trains faster without any augmentations and has better performance
-according to validation splits.
+Model is trained faster without any augmentations and has better performance
+according to validation.
 
 *Note*: A single model projected to be 4th place with 0.86 `R2` coefficient of
 determination.
